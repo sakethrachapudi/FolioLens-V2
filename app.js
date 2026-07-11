@@ -88,6 +88,100 @@ async function fetchNAVLive(isin) {
   return null;
 }
 
+/* JSONP fetch of the live Google Sheet — used by "Refresh Live" to pick up newly added transactions
+   without waiting for the next scheduled GitHub Action run. */
+function fetchSheetLive(sheetName) {
+  return new Promise((resolve, reject) => {
+    const cbName = 'cb_' + Math.random().toString(36).slice(2);
+    const script = document.createElement('script');
+    let done = false;
+    window[cbName] = (data) => { done = true; delete window[cbName]; script.remove(); resolve(data); };
+    script.onerror = () => { if (!done) { delete window[cbName]; script.remove(); reject(new Error('sheet fetch failed')); } };
+    script.src = `${API_URL}?sheet=${encodeURIComponent(sheetName)}&callback=${cbName}`;
+    document.body.appendChild(script);
+    setTimeout(() => { if (!done) { delete window[cbName]; script.remove(); reject(new Error('timeout')); } }, 20000);
+  });
+}
+
+let navSnapshotsCache = null;
+function fetchNavSnapshotsLive() {
+  if (navSnapshotsCache) return Promise.resolve(navSnapshotsCache);
+  return new Promise((resolve) => {
+    const cbName = 'cb_' + Math.random().toString(36).slice(2);
+    const script = document.createElement('script');
+    let done = false;
+    window[cbName] = (data) => { done = true; delete window[cbName]; script.remove(); navSnapshotsCache = data.snapshots || {}; resolve(navSnapshotsCache); };
+    script.onerror = () => { if (!done) { delete window[cbName]; script.remove(); navSnapshotsCache = {}; resolve({}); } };
+    script.src = `${API_URL}?action=nav_snapshots&callback=${cbName}`;
+    document.body.appendChild(script);
+    setTimeout(() => { if (!done) { delete window[cbName]; script.remove(); navSnapshotsCache = {}; resolve({}); } }, 15000);
+  });
+}
+
+/* client-side year-wise growth (mirrors etl/build_data.py's compute_year_wise()) */
+function computeYearWiseJS(funds, navSnapshots, today) {
+  const currentYear = String(new Date(today).getFullYear());
+  const allYears = [...new Set(funds.flatMap(f => f.txns.map(t => t.d.slice(0,4))))].sort();
+
+  const yearEndNav = (f, targetYr) => {
+    if (targetYr === currentYear) return f.liveNav;
+    const snap = navSnapshots[`${f.isin}_${targetYr}`];
+    if (snap) return snap.nav;
+    const yrTxns = f.txns.filter(t => t.d.slice(0,4) <= targetYr);
+    return yrTxns.length ? yrTxns[yrTxns.length-1].n : null;
+  };
+
+  return allYears.map(yr => {
+    const isPartial = yr === currentYear;
+    let startVal = 0, endVal = 0;
+    funds.forEach(f => {
+      const prevYr = String(parseInt(yr) - 1);
+      const startNav = yearEndNav(f, prevYr);
+      const startUnits = f.txns.filter(t => t.d.slice(0,4) < yr && t.a > 0).reduce((s,t) => s+t.u, 0)
+                        - f.txns.filter(t => t.d.slice(0,4) < yr && t.a < 0).reduce((s,t) => s+Math.abs(t.u), 0);
+      if (startNav && startUnits > 0) startVal += startUnits * startNav;
+      const endNav = yearEndNav(f, yr);
+      const endUnits = f.txns.filter(t => t.d.slice(0,4) <= yr && t.a > 0).reduce((s,t) => s+t.u, 0)
+                      - f.txns.filter(t => t.d.slice(0,4) <= yr && t.a < 0).reduce((s,t) => s+Math.abs(t.u), 0);
+      if (endNav && endUnits > 0) endVal += endUnits * endNav;
+    });
+    const freshInvested = funds.flatMap(f => f.txns.filter(t => t.d.startsWith(yr) && t.a > 0)).reduce((s,t) => s+t.a, 0);
+    const withdrawals = funds.flatMap(f => f.txns.filter(t => t.d.startsWith(yr) && t.a < 0)).reduce((s,t) => s+Math.abs(t.a), 0);
+    const absGain = endVal - startVal - freshInvested + withdrawals;
+    const gainPct = (startVal + freshInvested) > 0 ? absGain / (startVal + freshInvested) * 100 : 0;
+    let yrXirr = null;
+    try {
+      const jan1 = `${yr}-01-01`, dec31 = isPartial ? today : `${yr}-12-31`;
+      const yrCF = [];
+      if (startVal > 0) yrCF.push({ d: jan1, a: startVal });
+      funds.flatMap(f => f.txns.filter(t => t.d.startsWith(yr))).sort((a,b) => a.d.localeCompare(b.d)).forEach(t => {
+        if (t.a !== 0) yrCF.push({ d: t.d, a: Math.abs(t.a) });
+      });
+      if (yrCF.length && endVal > 0 && (new Date(dec31) - new Date(yrCF[0].d)) / 86400000 >= 30) {
+        yrXirr = xirr(yrCF, endVal, dec31);
+      }
+    } catch (e) { /* ignore */ }
+    return { yr, isPartial, startVal, endVal, freshInvested, withdrawals, absGain, gainPct, xirr: yrXirr };
+  });
+}
+
+/* client-side nature-wise allocation (mirrors etl/build_data.py's nature grouping) */
+function computeNatureJS(funds, today) {
+  const natMap = {};
+  funds.forEach(f => {
+    const cat = f.cat || 'Other';
+    const nm = natMap[cat] = natMap[cat] || { cat, value: 0, invested: 0, fundCount: 0, txns: [] };
+    nm.value += f.value;
+    nm.invested += f.txns.reduce((s,t) => s+t.a, 0);
+    nm.fundCount++;
+    nm.txns.push(...f.txns);
+  });
+  return Object.values(natMap).map(n => ({
+    cat: n.cat, value: n.value, invested: n.invested, fundCount: n.fundCount,
+    xirr: xirr(n.txns, n.value, today),
+  })).sort((a,b) => b.value - a.value);
+}
+
 /* ---------- state ---------- */
 const cache = {};      // key -> portfolio object from data.json (mutated in place on live refresh)
 const charts = {};     // key -> { growth, alloc }
@@ -388,40 +482,114 @@ function renderFamily() {
 /* ============================================================
    LIVE REFRESH (manual button — client-side NAV re-fetch)
    ============================================================ */
-async function refreshLive(key) {
+async function refreshLive(key, silent) {
   const p = cache[key];
   if (!p) return;
   const btn = document.getElementById(`${key}-refreshBtn`);
-  btn.disabled = true; btn.textContent = '↻ Refreshing…';
+  if (!silent) { btn.disabled = true; btn.textContent = '↻ Syncing…'; }
   document.getElementById(`${key}-dot`).className = 'dot spin';
-  document.getElementById(`${key}-statusTxt`).textContent = 'Fetching live NAVs…';
+  document.getElementById(`${key}-statusTxt`).textContent = 'Syncing transactions…';
 
   const today = td();
-  let updated = 0;
-  for (const f of p.funds) {
-    const live = await fetchNAVLive(f.isin);
-    if (live) {
-      f.liveNav = live.nav; f.navDate = today; f.isLive = true;
-      f.value = f.units * live.nav;
-      f.gain = f.value - f.invested;
-      f.gainPct = f.invested ? f.gain / f.invested * 100 : 0;
-      f.xirr = xirr(f.txns, f.value, today);
-      updated++;
-    }
+  const oldNavHistory = {}; p.funds.forEach(f => { oldNavHistory[f.isin] = f.navHistory; });
+
+  // 1) re-fetch the transaction list from the Sheet — this is what picks up new/edited entries
+  let raw;
+  try {
+    raw = await fetchSheetLive(PORTFOLIOS[key].sheet);
+    if (raw.error) throw new Error(raw.error);
+  } catch (e) {
+    toast('Could not sync transactions from Sheet: ' + e.message);
+    if (!silent) { btn.disabled = false; btn.textContent = '↻ Refresh'; }
+    document.getElementById(`${key}-dot`).className = 'dot';
+    document.getElementById(`${key}-statusTxt`).textContent = 'Live';
+    return;
   }
-  // recompute totals + portfolio xirr
+
+  // 2) re-fetch live NAVs for every fund (including any brand-new ones)
+  document.getElementById(`${key}-statusTxt`).textContent = 'Fetching live NAVs…';
+  let updated = 0;
+  const newFunds = [];
+  for (const f of raw.funds) {
+    const live = await fetchNAVLive(f.isin);
+    const liveNav = live ? live.nav : f.statementNav;
+    const isLive = !!live;
+    if (isLive) updated++;
+    const value = f.units * liveNav;
+    const gain = value - f.invested;
+    const gainPct = f.invested ? gain / f.invested * 100 : 0;
+    const finalDate = isLive ? today : (f.txns.length ? f.txns[f.txns.length-1].d : today);
+    const totalBuyUnits = f.txns.filter(t => t.a > 0).reduce((s,t) => s+t.u, 0);
+    newFunds.push({
+      isin: f.isin, name: f.name, cat: f.cat, units: f.units, invested: f.invested,
+      statementNav: f.statementNav, avgNav: totalBuyUnits ? f.invested/totalBuyUnits : 0,
+      liveNav, navDate: isLive ? today : 'stmt', isLive, value, gain, gainPct,
+      xirr: xirr(f.txns, value, finalDate), navHistory: oldNavHistory[f.isin] || [], txns: f.txns,
+    });
+  }
+  p.funds = newFunds;
+
+  // 3) recompute totals + portfolio xirr
   p.totals.invested = p.funds.reduce((s,f) => s+f.invested, 0);
   p.totals.value = p.funds.reduce((s,f) => s+f.value, 0);
-  const allTxns = p.funds.flatMap(f => f.txns);
-  p.totals.xirr = xirr(allTxns, p.totals.value, today);
+  p.totals.fundCount = p.funds.length;
+  const allTxnsCF = p.funds.flatMap(f => f.txns);
+  p.totals.xirr = xirr(allTxnsCF, p.totals.value, today);
   p.totals.gain = p.totals.value - p.totals.invested;
   const ranked = [...p.funds].filter(f=>f.xirr!=null).sort((a,b)=>b.xirr-a.xirr);
   p.gainers = ranked.slice(0,3).map(g=>({isin:g.isin,name:g.name,xirr:g.xirr}));
   p.losers = ranked.slice(-3).reverse().map(g=>({isin:g.isin,name:g.name,xirr:g.xirr}));
 
+  // 4) recompute year-wise growth (Fresh Invested / Withdrawals) + nature-wise allocation
+  document.getElementById(`${key}-statusTxt`).textContent = 'Recomputing analytics…';
+  const navSnapshots = await fetchNavSnapshotsLive();
+  p.yearWise = computeYearWiseJS(p.funds, navSnapshots, today);
+  p.nature = computeNatureJS(p.funds, today);
+  if (PORTFOLIOS[key].swp) {
+    p.swp = recomputeSWP(p.funds, p.totals.value, p.totals.xirr, today);
+  }
+
   renderPortfolio(key);
-  btn.disabled = false; btn.textContent = '↻ Refresh';
-  toast(`${updated}/${p.funds.length} NAVs updated live · other analytics update on the next 6h auto-refresh`);
+  if (!silent) { btn.disabled = false; btn.textContent = '↻ Refresh'; }
+  toast(`Synced · ${p.funds.length} funds, ${updated} live NAVs`);
+
+  syncFamilyFromCache(navSnapshots, today);
+}
+
+function recomputeSWP(funds, totalValue, portXirr, todayStr) {
+  const today = new Date(todayStr);
+  const allTxns = funds.flatMap(f => f.txns);
+  const withdrawals = allTxns.filter(t => t.a < 0);
+  const totalWithdrawn = withdrawals.reduce((s,t) => s+Math.abs(t.a), 0);
+  const cutoff = new Date(today); cutoff.setDate(cutoff.getDate() - 365);
+  const recent = withdrawals.filter(t => new Date(t.d) >= cutoff);
+  const pool = recent.length ? recent : withdrawals;
+  let avgMonthly = 0;
+  if (pool.length) {
+    const earliest = new Date(Math.min(...pool.map(t => new Date(t.d))));
+    const spanDays = Math.max(1, (today - earliest) / 86400000);
+    avgMonthly = pool.reduce((s,t) => s+Math.abs(t.a), 0) / Math.max(1, spanDays / 30.44);
+  }
+  const runwayMonths = avgMonthly > 0 ? totalValue / avgMonthly : null;
+  const annualWithdrawalRatePct = totalValue > 0 ? avgMonthly * 12 / totalValue * 100 : 0;
+  const sustainable = portXirr != null && annualWithdrawalRatePct < portXirr;
+  return { totalWithdrawn, withdrawalCount: withdrawals.length, avgMonthly, runwayMonths, annualWithdrawalRatePct, sustainable };
+}
+
+/* keeps the Family tab consistent with whatever's freshest in `cache` after any live refresh */
+function syncFamilyFromCache(navSnapshots, today) {
+  if (!famData) return;
+  const keys = Object.keys(PORTFOLIOS);
+  famData.totals.invested = keys.reduce((s,k) => s + (cache[k]?.totals.invested || 0), 0);
+  famData.totals.value = keys.reduce((s,k) => s + (cache[k]?.totals.value || 0), 0);
+  famData.totals.gain = famData.totals.value - famData.totals.invested;
+  const allTxnsCF = keys.flatMap(k => (cache[k]?.funds || []).flatMap(f => f.txns));
+  famData.totals.xirr = xirr(allTxnsCF, famData.totals.value, today);
+  famData.compare = keys.map(k => ({ sheet: PORTFOLIOS[k].sheet, label: PORTFOLIOS[k].label, accent: PORTFOLIOS[k].accent,
+    invested: cache[k]?.totals.invested || 0, value: cache[k]?.totals.value || 0, xirr: cache[k]?.totals.xirr ?? null }));
+  const allFunds = keys.flatMap(k => cache[k]?.funds || []);
+  famData.yearWise = computeYearWiseJS(allFunds, navSnapshots, today);
+  if (document.getElementById('panel-fam').classList.contains('active')) renderFamily();
 }
 
 /* ============================================================
@@ -502,8 +670,8 @@ async function submitTxn() {
     const j = await res.json().catch(() => ({}));
     if (j && j.error) throw new Error(j.error);
     btn.textContent = 'Saved ✓';
-    toast('Transaction saved to Google Sheets');
-    setTimeout(() => { closeTxnModal(); btn.disabled = false; btn.textContent = 'Save Transaction'; }, 700);
+    toast('Transaction saved — syncing dashboard…');
+    setTimeout(() => { closeTxnModal(); btn.disabled = false; btn.textContent = 'Save Transaction'; refreshLive(key, true); }, 700);
   } catch (e) {
     btn.disabled = false; btn.textContent = 'Save Transaction';
     errBox.textContent = 'Could not save — your Apps Script may not have the doPost handler set up yet. See the setup note below.';
