@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0e1117">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="FolioLens">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<title>FolioLens — Suneetha Portfolio</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,600&family=Inter:wght@400;500;600&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0e1117;--sf:#161b27;--sfh:#1e2535;--bd:#2a3347;--ac:#f5c542;--acd:rgba(245,197,66,.12);--rd:#ff6b6b;--rdd:rgba(255,107,107,.12);--tx:#e8edf5;--mu:#7a8aa0;--lb:#4a5a72}
+body{background:var(--bg);color:var(--tx);font-family:'Inter',sans-serif;font-size:14px;min-height:100vh;padding-bottom:60px}
+header{display:flex;align-items:center;justify-content:space-between;padding:18px 32px;border-bottom:1px solid var(--bd);position:sticky;top:0;background:rgba(14,17,23,.96);backdrop-filter:blur(8px);z-index:100}
+.logo{font-family:'Fraunces',serif;font-size:22px;font-weight:600;letter-spacing:-.5px}.logo span{color:var(--ac)}
+.logo-owner{font-size:11px;color:var(--lb);font-family:'Inter';font-weight:400;margin-left:6px}
+.hdr{display:flex;align-items:center;gap:14px}
+.pill{display:flex;align-items:center;gap:7px;background:var(--sf);border:1px solid var(--bd);border-radius:20px;padding:6px 14px;font-size:11px;font-family:'DM Mono',monospace;color:var(--mu)}
+.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.dot.live{background:var(--ac);animation:pulse 2s infinite}.dot.spin{background:var(--lb);animation:blink 1s infinite}.dot.err{background:var(--rd)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+.btn{background:var(--acd);border:1px solid rgba(94,231,183,.3);color:var(--ac);border-radius:8px;padding:7px 16px;font-size:12px;font-family:'Inter',sans-serif;font-weight:500;cursor:pointer;border-color:rgba(245,197,66,.3)}
+.btn:hover{opacity:.85}.btn:disabled{opacity:.4;cursor:not-allowed}
+.back-btn{background:transparent;border:1px solid var(--bd);color:var(--mu);border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;text-decoration:none;display:flex;align-items:center;gap:6px}
+.back-btn:hover{border-color:var(--lb);color:var(--tx)}
+.page{max-width:1320px;margin:0 auto;padding:0 24px}
+.banner{display:flex;align-items:center;gap:12px;background:rgba(94,231,183,.06);border:1px solid rgba(94,231,183,.2);border-radius:10px;padding:13px 18px;margin:20px 0;font-size:13px;color:var(--ac)}
+.spinner{width:16px;height:16px;border:2px solid rgba(94,231,183,.2);border-top-color:var(--ac);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0}
+@keyframes spin{to{transform:rotate(360deg)}}.banner.gone{display:none}
+.prog{height:3px;background:var(--acd);border-radius:2px;margin-top:8px;width:100%}
+.prog-fill{height:100%;background:var(--ac);border-radius:2px;transition:width .4s}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:24px 0}
+.card{background:var(--sf);border:1px solid var(--bd);border-radius:12px;padding:18px 20px}
+.cl{font-size:10px;font-weight:600;letter-spacing:.1em;color:var(--lb);text-transform:uppercase;margin-bottom:8px}
+.cv{font-family:'Fraunces',serif;font-size:24px;font-weight:600;line-height:1;color:var(--tx)}
+.cs{font-size:11px;color:var(--mu);margin-top:6px;font-family:'DM Mono',monospace}
+.card.ac{border-color:rgba(245,197,66,.3);background:rgba(245,197,66,.04)}
+.pos{color:var(--ac)}.neg{color:var(--rd)}
+.sh{display:flex;align-items:center;justify-content:space-between;margin:28px 0 12px;padding-bottom:10px;border-bottom:1px solid var(--bd)}
+.st{font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--mu)}
+.nm{font-size:10px;color:var(--lb);font-family:'DM Mono',monospace}
+.tw{background:var(--sf);border:1px solid var(--bd);border-radius:12px;overflow:auto}
+table{width:100%;border-collapse:collapse;min-width:860px}
+thead th{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--lb);font-weight:600;padding:11px 15px;text-align:left;border-bottom:1px solid var(--bd);white-space:nowrap}
+thead th.r{text-align:right}
+tbody tr{border-bottom:1px solid var(--bd);transition:background .12s}tbody tr:last-child{border-bottom:none}tbody tr:hover{background:var(--sfh)}
+td{padding:12px 15px;vertical-align:middle}td.r{text-align:right}
+.fn{font-size:13px;font-weight:500}.fc{font-size:10px;color:var(--mu);margin-top:2px}
+.mo{font-family:'DM Mono',monospace;font-size:12px}
+.bg{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;font-family:'DM Mono',monospace}
+.bgp{background:var(--acd);color:var(--ac)}.bgn{background:var(--rdd);color:var(--rd)}
+.nc{display:flex;flex-direction:column;align-items:flex-end;gap:2px}
+.nv{font-family:'DM Mono',monospace;font-size:13px;font-weight:500}
+.src{font-size:9px;padding:1px 5px;border-radius:3px;font-family:'DM Mono',monospace}
+.slive{background:rgba(94,231,183,.15);color:var(--ac)}.sstmt{background:rgba(122,138,160,.15);color:var(--mu)}
+.xw{display:flex;align-items:center;gap:7px}
+.xb{flex:1;height:4px;background:var(--bd);border-radius:2px;overflow:hidden;min-width:44px}
+.xf{height:100%;border-radius:2px}
+
+/* ── Year-wise growth ── */
+
+/* ── Nature-wise ── */
+.nature-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:14px}
+.nat-card{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:14px 16px;position:relative;overflow:hidden;cursor:pointer;transition:border-color .2s}
+.nat-card:hover{border-color:var(--lb)}.nat-card.open{border-color:rgba(255,255,255,.15)}
+.nat-toggle{position:absolute;top:12px;right:12px;font-size:16px;color:var(--lb);transition:transform .25s;line-height:1}
+.nat-card.open .nat-toggle{transform:rotate(180deg)}
+.nat-detail{display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--bd)}
+.nat-card.open .nat-detail{display:block}
+.nat-fund-row{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+.nat-fund-row:last-child{border-bottom:none}
+.nat-fund-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.nat-fund-info{flex:1;min-width:0}
+.nat-fund-name{font-size:11px;font-weight:500;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nat-fund-isin{font-size:9px;color:var(--lb);font-family:'DM Mono',monospace;margin-top:1px}
+.nat-fund-inv{font-family:'DM Mono',monospace;font-size:9px;color:var(--lb);margin-top:1px}
+.nat-fund-nums{display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0}
+.nat-fund-val{font-family:'DM Mono',monospace;font-size:11px;color:var(--tx)}
+.nat-fund-sub{display:flex;gap:6px;align-items:center}
+.nat-fund-pct{font-family:'DM Mono',monospace;font-size:10px}
+.nat-fund-xirr{font-family:'DM Mono',monospace;font-size:10px}
+.nat-name{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--mu);margin-bottom:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nat-val{font-family:'Fraunces',serif;font-size:20px;font-weight:600;line-height:1;margin-bottom:4px;color:var(--tx)}
+.nat-meta{display:flex;align-items:center;justify-content:space-between;margin-top:8px}
+.nat-pct-wrap{flex:1;height:5px;background:var(--bd);border-radius:3px;overflow:hidden;margin:0 8px}
+.nat-pct-fill{height:100%;border-radius:3px}
+.nat-pct-lbl{font-family:'DM Mono',monospace;font-size:10px;color:var(--mu);width:38px;text-align:right;flex-shrink:0}
+.nat-xirr{display:flex;align-items:center;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid var(--bd)}
+.nat-xirr-lbl{font-size:10px;color:var(--lb);flex:1}
+.nat-xirr-val{font-family:'DM Mono',monospace;font-size:12px;font-weight:500}
+.nat-funds{font-size:10px;color:var(--lb);font-family:'DM Mono',monospace;margin-top:2px}
+.nat-inv-row{display:flex;align-items:center;justify-content:space-between;margin-top:8px;padding:6px 8px;background:rgba(255,255,255,.03);border-radius:6px}
+.nat-inv-lbl{font-size:10px;color:var(--lb)}
+.nat-inv-val{font-family:'DM Mono',monospace;font-size:11px;color:var(--tx)}
+.nat-gain{font-family:'DM Mono',monospace;font-size:10px;margin-top:3px;text-align:right}
+@media(max-width:900px){.cards{grid-template-columns:1fr 1fr}header{padding:14px 16px}.page{padding:0 12px}.nature-grid{grid-template-columns:1fr 1fr}.yr-grid{grid-template-columns:1fr 1fr}}
+
+/* ── Collapsible sections ── */
+.sec-header{display:flex;align-items:center;justify-content:space-between;margin:24px 0 0;padding:14px 18px;background:var(--sf);border:1px solid var(--bd);border-radius:10px;cursor:pointer;transition:border-color .2s;user-select:none}
+.sec-header:hover{border-color:var(--lb)}
+.sec-header.open{border-radius:10px 10px 0 0;border-bottom-color:transparent}
+.sec-title{font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--mu)}
+.sec-right{display:flex;align-items:center;gap:10px}
+.sec-sub{font-size:10px;color:var(--lb);font-family:'DM Mono',monospace}
+.sec-chevron{font-size:18px;color:var(--lb);transition:transform .25s;line-height:1;font-style:normal}
+.sec-header.open .sec-chevron{transform:rotate(180deg)}
+.sec-body{display:none;border:1px solid var(--bd);border-top:none;border-radius:0 0 10px 10px;padding:16px;background:var(--sf)}
+.sec-header.open + .sec-body{display:block}
+/* ── New year cards ── */
+.yr-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
+.yr-card{background:var(--sfh);border:1px solid var(--bd);border-radius:10px;padding:14px 16px;position:relative;overflow:hidden}
+.yr-badge{font-family:'DM Mono',monospace;font-size:11px;font-weight:600;color:var(--mu);margin-bottom:10px;display:flex;align-items:center;justify-content:space-between}
+.yr-ytd{font-size:9px;padding:2px 6px;background:var(--acd);color:var(--ac);border-radius:3px;font-weight:600}
+.yr-rows{display:flex;flex-direction:column;gap:6px}
+.yr-row{display:flex;align-items:center;justify-content:space-between}
+.yr-lbl{font-size:10px;color:var(--lb)}
+.yr-val{font-family:'DM Mono',monospace;font-size:11px;font-weight:500;color:var(--tx)}
+.yr-divider{height:1px;background:var(--bd);margin:4px 0}
+.yr-xirr-row{display:flex;align-items:center;justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--bd)}
+.yr-xirr-lbl{font-size:10px;color:var(--lb)}
+.yr-xirr-val{font-family:'DM Mono',monospace;font-size:14px;font-weight:600}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">Folio<span>Lens</span><span class="logo-owner">· Suneetha</span></div>
+  <div class="hdr">
+    <div class="pill"><div class="dot spin" id="sDot"></div><span id="sTxt">Fetching NAVs…</span></div>
+    <a href="index.html" class="back-btn">← Family</a>
+    <button class="btn" id="btnR" onclick="init()" disabled>↻ Refresh</button>
+  </div>
+</header>
+<div class="page">
+  <div class="banner" id="banner">
+    <div class="spinner"></div>
+    <div style="flex:1">
+      <div id="bMsg">Fetching live NAVs…</div>
+      <div class="prog"><div class="prog-fill" id="prog" style="width:0%"></div></div>
+    </div>
+  </div>
+  <div class="cards">
+    <div class="card"><div class="cl">Total Invested</div><div class="cv" id="sInv">—</div><div class="cs" id="invSub">—</div></div>
+    <div class="card"><div class="cl">Current Value</div><div class="cv" id="sVal">—</div><div class="cs" id="sGain"></div></div>
+    <div class="card ac"><div class="cl">Portfolio XIRR</div><div class="cv" id="sXirr">—</div><div class="cs">exact cashflow return</div></div>
+    <div class="card"><div class="cl">Total Gain</div><div class="cv" id="sGainAbs">—</div><div class="cs" id="sMult"></div></div>
+  </div>
+  <!-- Holdings -->
+  <div class="sec-header open" onclick="this.classList.toggle('open')">
+    <div class="sec-title" id="holdTitle">Holdings</div>
+    <div class="sec-right"><div class="sec-sub" id="navDate">Fetching…</div><span class="sec-chevron">⌄</span></div>
+  </div>
+  <div class="sec-body">
+    <div class="tw">
+      <table>
+        <thead><tr>
+          <th>Fund</th><th class="r">Units</th><th class="r">Avg NAV</th>
+          <th class="r">Live NAV</th><th class="r">Invested</th>
+          <th class="r">Current Value</th><th class="r">Abs Gain</th>
+          <th class="r" style="min-width:145px">XIRR</th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Year-wise Growth -->
+  <div class="sec-header" onclick="this.classList.toggle('open')">
+    <div class="sec-title">Year-wise Growth</div>
+    <div class="sec-right"><div class="sec-sub">Invested · Value · Gain · XIRR per year</div><span class="sec-chevron">⌄</span></div>
+  </div>
+  <div class="sec-body">
+    <div class="yr-grid" id="yrGrid"></div>
+  </div>
+
+  <!-- Nature-wise Breakdown -->
+  <div class="sec-header" onclick="this.classList.toggle('open')">
+    <div class="sec-title">Nature-wise Breakdown</div>
+    <div class="sec-right"><div class="sec-sub">Value · allocation · weighted XIRR</div><span class="sec-chevron">⌄</span></div>
+  </div>
+  <div class="sec-body">
+    <div class="nature-grid" id="natureGrid"></div>
+  </div>
+
+</div>
+
+<script>
+// ── PASTE FUNDS DATA HERE ──────────────────────────────────────────────────
+
+const PAL=['#5ee7b7','#7b8ef7','#f5c542','#ff6b6b','#a78bfa','#38bdf8','#fb923c','#e879f9','#34d399','#facc15','#f472b6','#60a5fa','#c084fc','#fb7185','#2dd4bf','#a3e635','#fbbf24','#818cf8','#4ade80','#22d3ee','#fdba74','#94a3b8','#f43f5e','#0891b2','#9333ea','#ca8a04'];
+const ACCENT = '#f5c542';
+
+function fetchWithTimeout(url,ms){return new Promise((res,rej)=>{const t=setTimeout(()=>rej(new Error('timeout')),ms);fetch(url).then(r=>{clearTimeout(t);res(r);}).catch(e=>{clearTimeout(t);rej(e);});})}
+
+function xirr(txns,fv,fDate){
+  const fl=txns.map(t=>({t:new Date(t.d),a:-t.a}));
+  fl.push({t:new Date(fDate),a:fv});
+  const t0=fl[0].t,dy=fl.map(f=>(f.t-t0)/86400000);
+  const npv=r=>fl.reduce((s,f,i)=>s+f.a/Math.pow(1+r,dy[i]/365),0);
+  const dnp=r=>fl.reduce((s,f,i)=>s-(dy[i]/365)*f.a/Math.pow(1+r,dy[i]/365+1),0);
+  let r=0.12;
+  for(let i=0;i<300;i++){const n=npv(r),d=dnp(r);if(Math.abs(d)<1e-14)break;const nr=r-n/d;if(Math.abs(nr-r)<1e-10){r=nr;break;}r=Math.max(nr,-0.9999);}
+  return isFinite(r)?r*100:null;
+}
+const fmt=n=>'₹'+Math.round(n).toLocaleString('en-IN');
+const pct=n=>(n>=0?'+':'')+n.toFixed(2)+'%';
+const posC=n=>n>=0?'pos':'neg';
+const posCol=n=>n>=0?'var(--ac)':'var(--rd)';
+const today=()=>new Date().toISOString().slice(0,10);
+const setStatus=(s,t)=>{document.getElementById('sDot').className='dot '+s;document.getElementById('sTxt').textContent=t;};
+
+const ISIN_SCHEME = {"INF090I01171":100471,"INF179K01608":101762,"INF789F01810":102394,"INF200K01370":102756,"INF174K01211":102875,"INF760K01167":102920,"INF789F01AG5":103098,"INF090I01841":103151,"INF204K01GE7":104637,"INF179K01CR2":105758,"INF090I01981":105817,"INF740K01037":105875,"INF109K01BL4":108466,"INF769K01101":112932,"INF846K01859":114564,"INF740K01LP6":117691,"INF754K01CE0":118624,"INF204K01XF9":118650,"INF204K01E54":118668,"INF179K01UT0":118955,"INF179K01XQ0":118989,"INF179K01XZ1":119062,"INF200K01RY0":119609,"INF174K01JP2":119750,"INF200K01UT4":119800,"INF109K01Y07":120251,"INF109K015K4":120334,"INF109K01S39":120616,"INF966L01689":120828,"INF879O01027":122639,"INF879O01019":122640,"INF179KA1RW5":130503,"INF200KA1473":133858,"INF277K01Z44":135797,"INF205K013T3":145137,"INF194KB1AL4":147946,"INF204KB19V4":148457,"INF109KC1O90":148653,"INF879O01175":148958,"INF109KC1R14":148990,"INF174KA1HV3":149185,"INF179KC1BV9":149366,"INF846K013E0":149383,"INF204KC1BL9":152034};
+
+async function fetchNAV(isin){
+  const schemeCode = ISIN_SCHEME[isin];
+
+  // Strategy 1: mfapi.in via corsproxy.io (most current NAVs — 1 day ahead of captnemo)
+  if(schemeCode){
+    try{
+      const url = `https://api.mfapi.in/mf/${schemeCode}`;
+      const r = await fetchWithTimeout(`https://corsproxy.io/?url=${encodeURIComponent(url)}`, 15000);
+      if(r.ok){
+        const j = await r.json();
+        if(j && j.data && j.data[0]){
+          const latest = j.data[0];
+          const nav = parseFloat(latest.nav);
+          const parts = latest.date.split('-');
+          const date = parts.length===3 ? `${parts[2]}-${parts[1]}-${parts[0]}` : latest.date;
+          if(nav > 0) return { nav, date, name: j.meta?.scheme_name||'' };
+        }
+      }
+    }catch(e){ console.warn('mfapi failed:', isin); }
+  }
+
+  // Strategy 2: captnemo fallback
+  try{
+    const r = await fetchWithTimeout(`https://mf.captnemo.in/nav/${isin}`, 12000);
+    if(r.ok){ const j=await r.json(); if(j.nav&&parseFloat(j.nav)>0) return{nav:parseFloat(j.nav),date:j.date||'',name:j.name||''}; }
+  }catch(e){ console.warn('captnemo failed:', isin); }
+
+  return null;
+}
+
+let navMap={};
+let FUNDS = [];
+const API_URL = 'https://script.google.com/macros/s/AKfycbzZrng_0FuzFdh-Iepf98O2FOTnesTCie9zlCfSXS_3DBc0w1-fRj41FARj9fupo5oM/exec';
+const SHEET_NAME = 'Suneetha';
+
+function fetchSheet(sheetName) {
+  return new Promise((resolve, reject) => {
+    const cbName = 'cb_' + Date.now();
+    const script = document.createElement('script');
+    window[cbName] = (data) => {
+      delete window[cbName];
+      document.body.removeChild(script);
+      if (data.error) reject(new Error(data.error));
+      else resolve(data);
+    };
+    script.onerror = () => reject(new Error('Script load failed'));
+    script.src = `${API_URL}?sheet=${sheetName}&callback=${cbName}`;
+    document.body.appendChild(script);
+  });
+}
+
+
+async function init(){
+  setStatus('spin','Loading portfolio…');
+  document.getElementById('btnR').disabled=true;
+  document.getElementById('banner').className='banner';
+  navMap={};
+
+  try {
+    document.getElementById('bMsg').textContent='Fetching transactions from Google Sheets…';
+    document.getElementById('prog').style.width='15%';
+    const data = await fetchSheet(SHEET_NAME);
+    if (data.error) throw new Error(data.error);
+    FUNDS = data.funds;
+    document.getElementById('bMsg').textContent='Loaded '+FUNDS.length+' funds · fetching live NAVs…';
+
+  // Load NAV snapshots from Google Sheets
+  try {
+    const snapData = await new Promise((resolve, reject) => {
+      const cb = 'snap_' + Date.now();
+      const s = document.createElement('script');
+      window[cb] = (d) => { delete window[cb]; document.body.removeChild(s); resolve(d); };
+      s.onerror = () => reject(new Error('snap fail'));
+      s.src = `${API_URL}?action=nav_snapshots&callback=${cb}`;
+      document.body.appendChild(s);
+    });
+    navSnapshots = snapData.snapshots || {};
+    console.log('NAV snapshots loaded:', Object.keys(navSnapshots).length);
+  } catch(e) {
+    console.warn('NAV snapshots not loaded:', e.message);
+  }
+
+    document.getElementById('prog').style.width='30%';
+  } catch(e) {
+    setStatus('err','Failed to load sheet — check Apps Script');
+    document.getElementById('banner').className='banner gone';
+    document.getElementById('btnR').disabled=false;
+    return;
+  }
+
+  const total=FUNDS.length;
+  let done=0;
+  render();
+  await Promise.allSettled(FUNDS.map(async f => {
+    try { const d=await fetchNAV(f.isin); if(d) navMap[f.isin]=d; } catch(e) {}
+    done++;
+    document.getElementById('prog').style.width=(30+Math.round(done/total*70))+'%';
+    document.getElementById('bMsg').textContent='NAV '+done+'/'+total+': '+f.name.split(' ').slice(0,3).join(' ')+'…';
+    render();
+  }));
+
+  document.getElementById('banner').className='banner gone';
+  document.getElementById('btnR').disabled=false;
+  const n=Object.keys(navMap).length;
+  const time=new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
+  if(n===FUNDS.length) setStatus('live','All '+FUNDS.length+' NAVs live · '+time);
+  else if(n>0) setStatus('live',n+'/'+FUNDS.length+' live · '+(FUNDS.length-n)+' on stmt NAV · '+time);
+  else setStatus('err','NAV fetch failed — showing statement NAVs');
+  render();
+}
+
+function render(){
+  const td=today();
+  let tInv=0,tVal=0;
+  const rows=FUNDS.map((f,i)=>{
+    const live=navMap[f.isin];
+    const nav=live?live.nav:f.statementNav;
+    const isLive=!!live;
+    const val=f.units*nav;
+    const gain=val-f.invested,gp=gain/f.invested*100;
+    const x=xirr(f.txns,val,isLive?td:f.txns[f.txns.length-1].d);
+    tInv+=f.invested;tVal+=val;
+    return{f,nav,isLive,navDate:live?.date||'stmt',val,gain,gp,x,color:PAL[i]};
+  });
+
+  const tg=tVal-tInv,tgp=tg/tInv*100;
+  const pXirr=xirr(FUNDS.flatMap(f=>f.txns),tVal,td);
+
+  document.getElementById('sInv').textContent=fmt(tInv);
+  document.getElementById('sVal').textContent=fmt(tVal);
+  
+  document.getElementById('sGain').innerHTML=`<span class="${posC(tg)}">${pct(tgp)}</span>`;
+  document.getElementById('sXirr').textContent=pXirr!=null?(Math.abs(pXirr)<0.005?'0.00%':pct(pXirr)):'—';
+  document.getElementById('sXirr').className='cv '+(pXirr!=null?posC(pXirr):'');
+  document.getElementById('sGainAbs').textContent=Math.abs(tg)<1?'₹0':(tg>=0?'+':'-')+fmt(Math.abs(tg));
+  document.getElementById('sGainAbs').className='cv '+posC(tg);
+  document.getElementById('sMult').textContent=`${(tVal/tInv).toFixed(2)}× money multiplier`;
+  document.getElementById('invSub').textContent=`${FUNDS.length} txns · ${FUNDS.length} funds`;
+  const liveDate=Object.values(navMap)[0]?.date||'statement';
+  document.getElementById('navDate').textContent=`NAV as of ${liveDate} · mfapi.in`;
+  document.getElementById('holdTitle').textContent=`Holdings — ${FUNDS.length} Funds`;
+
+  // Table
+  const tb=document.getElementById('tbody');tb.innerHTML='';
+  rows.sort((a,b)=>(b.x??-Infinity)-(a.x??-Infinity));
+  rows.forEach(({f,nav,isLive,navDate,val,gain,gp,x,color})=>{
+    const totalBuyUnits=f.txns.filter(t=>t.a>0).reduce((s,t)=>s+t.u,0);
+    const avgNav=totalBuyUnits>0?f.invested/totalBuyUnits:0;
+    const bw=Math.min(Math.abs(x??0)/40*100,100);
+    const tr=document.createElement('tr');
+    tr.innerHTML=`
+      <td><div style="display:flex;align-items:center;gap:8px">
+        <div style="width:3px;height:34px;border-radius:2px;background:${color};flex-shrink:0"></div>
+        <div><div class="fn">${f.name}</div><div class="fc">${f.cat} · ${f.isin}</div></div>
+      </div></td>
+      <td class="r mo">${f.units.toFixed(3)}</td>
+      <td class="r mo">₹${avgNav.toFixed(2)}</td>
+      <td class="r"><div class="nc">
+        <span class="nv">₹${nav.toFixed(4)}</span>
+        <span style="display:flex;align-items:center;gap:4px;margin-top:2px">
+          <span class="src ${isLive?'slive':'sstmt'}">${isLive?'live':'stmt'}</span>
+          <span style="font-size:9px;color:var(--lb)">${navDate}</span>
+        </span>
+      </div></td>
+      <td class="r mo">${fmt(f.invested)}</td>
+      <td class="r mo">${fmt(val)}</td>
+      <td class="r"><span class="mo ${posC(gain)}">${gain>=0?'+':'-'}${fmt(Math.abs(gain))}</span><br>
+        <span class="bg bg${posC(gain)[0]}">${gain>=0?'+':''}${gp.toFixed(2)}%</span></td>
+      <td class="r"><div class="xw">
+        <span class="mo ${posC(x??0)}" style="min-width:58px;text-align:right">${x!=null?pct(x):'—'}</span>
+        <div class="xb"><div class="xf" style="width:${bw}%;background:${color}"></div></div>
+      </div></td>`;
+    tb.appendChild(tr);
+  });
+
+
+
+  // ── Year-wise Growth (with NAV snapshots for year-end accuracy) ──────────
+  const currentYear = new Date().getFullYear().toString();
+  const allYrs = [...new Set(FUNDS.flatMap(f => f.txns.map(t => t.d.slice(0,4))))].sort();
+
+  const getYearEndNav = (fund, targetYr) => {
+    if (targetYr === currentYear) return navMap[fund.isin]?.nav || fund.statementNav;
+    const snap = navSnapshots[`${fund.isin}_${targetYr}`];
+    if (snap) return snap.nav;
+    const yrTxns = fund.txns.filter(t => t.d.slice(0,4) <= targetYr);
+    return yrTxns.length ? yrTxns[yrTxns.length-1].n : null;
+  };
+
+  const yrGrid = document.getElementById('yrGrid');
+  yrGrid.innerHTML = '';
+
+  allYrs.forEach(yr => {
+    const isPartial = yr === currentYear;
+    const cumInvested = FUNDS.flatMap(f => f.txns.filter(t => t.d.slice(0,4) <= yr && t.a > 0))
+                             .reduce((s,t) => s+t.a, 0);
+    let startVal = 0, endVal = 0;
+    FUNDS.forEach(f => {
+      const prevYr = String(parseInt(yr) - 1);
+      const startNav = getYearEndNav(f, prevYr);
+      const startUnits = f.txns.filter(t => t.d.slice(0,4) < yr && t.a > 0).reduce((s,t) => s+t.u, 0)
+                       - f.txns.filter(t => t.d.slice(0,4) < yr && t.a < 0).reduce((s,t) => s+Math.abs(t.u), 0);
+      if (startNav && startUnits > 0) startVal += startUnits * startNav;
+      const endNav = getYearEndNav(f, yr);
+      const endUnits = f.txns.filter(t => t.d.slice(0,4) <= yr && t.a > 0).reduce((s,t) => s+t.u, 0)
+                     - f.txns.filter(t => t.d.slice(0,4) <= yr && t.a < 0).reduce((s,t) => s+Math.abs(t.u), 0);
+      if (endNav && endUnits > 0) endVal += endUnits * endNav;
+    });
+    const freshInvested = FUNDS.flatMap(f => f.txns.filter(t => t.d.startsWith(yr) && t.a > 0)).reduce((s,t) => s+t.a, 0);
+    const withdrawals   = FUNDS.flatMap(f => f.txns.filter(t => t.d.startsWith(yr) && t.a < 0)).reduce((s,t) => s+Math.abs(t.a), 0);
+    const absGain = endVal - startVal - freshInvested + withdrawals;
+    const gainPct = (startVal + freshInvested) > 0 ? (absGain / (startVal + freshInvested) * 100) : 0;
+    let yrXirr = null;
+    try {
+      const jan1  = `${yr}-01-01`;
+      const dec31 = isPartial ? td : `${yr}-12-31`;
+      const yrCF  = [];
+      if (startVal > 0) yrCF.push({ d: jan1, a: startVal });
+      FUNDS.flatMap(f => f.txns.filter(t => t.d.startsWith(yr)))
+           .sort((a,b) => a.d.localeCompare(b.d))
+           .forEach(t => yrCF.push({ d: t.d, a: t.a }));
+      // Need at least 30 days between first and last cashflow for XIRR to converge
+      const firstDate = new Date(yrCF[0]?.d || jan1);
+      const lastDate  = new Date(dec31);
+      const daysDiff  = (lastDate - firstDate) / 86400000;
+      if (yrCF.length > 0 && endVal > 0 && daysDiff >= 30) {
+        yrXirr = xirr(yrCF, endVal, dec31);
+      }
+    } catch(e) {}
+    const gc = absGain >= 0 ? 'var(--ac)' : 'var(--rd)';
+    const xc = yrXirr != null ? (yrXirr >= 0 ? 'var(--ac)' : 'var(--rd)') : 'var(--mu)';
+    const card = document.createElement('div');
+    card.className = 'yr-card';
+    card.innerHTML = `
+      <div style="position:absolute;top:0;left:0;right:0;height:2px;background:${gc}"></div>
+      <div class="yr-badge">
+        <span>${yr}</span>
+        ${isPartial ? '<span class="yr-ytd">YTD</span>' : ''}
+      </div>
+      <div class="yr-rows">
+        <div class="yr-row"><span class="yr-lbl">Start Value</span><span class="yr-val">${fmt(startVal)}</span></div>
+        <div class="yr-row"><span class="yr-lbl">Fresh Invested</span><span class="yr-val">${fmt(freshInvested)}</span></div>
+        ${withdrawals > 0 ? `<div class="yr-row"><span class="yr-lbl">Withdrawals</span><span class="yr-val" style="color:var(--rd)">-${fmt(withdrawals)}</span></div>` : ''}
+        <div class="yr-row"><span class="yr-lbl">End Value</span><span class="yr-val">${fmt(endVal)}</span></div>
+        <div class="yr-divider"></div>
+        <div class="yr-row"><span class="yr-lbl">Abs Gain</span><span class="yr-val" style="color:${gc}">${absGain>=0?'+':''}${fmt(absGain)}</span></div>
+        <div class="yr-row"><span class="yr-lbl">Gain %</span><span class="yr-val" style="color:${gc}">${gainPct>=0?'+':''}${gainPct.toFixed(2)}%</span></div>
+      </div>
+      <div class="yr-xirr-row">
+        <span class="yr-xirr-lbl">Year XIRR</span>
+        <span class="yr-xirr-val" style="color:${xc}">${yrXirr!=null?pct(yrXirr):'—'}</span>
+      </div>`;
+    yrGrid.appendChild(card);
+  });
+
+
+    // ── Nature-wise breakdown ──────────────────────────────────────────────
+  const NAT_PAL = {
+    'Large Cap':             '#4ade80',
+    'Mid Cap':               '#38bdf8',
+    'Small Cap':             '#fb923c',
+    'Flexi Cap':             '#f472b6',
+    'Focused Fund':          '#facc15',
+    'Multi Cap':             '#a78bfa',
+    'Large & Mid Cap':       '#2dd4bf',
+    'Thematic':              '#f87171',
+    'Sectoral':              '#fbbf24',
+    'Value':                 '#c084fc',
+    'Fund of Funds':         '#60a5fa',
+    'Multi Asset':           '#34d399',
+    'Conservative Hybrid':   '#94a3b8',
+    'Aggressive Hybrid':     '#e879f9',
+    'Liquid':                '#a3e635',
+    'Other':                 '#cbd5e1',
+  };;
+  const natMap={};
+  rows.forEach(({f,val,x,color})=>{
+    const cat=f.cat||'Other';
+    if(!natMap[cat])natMap[cat]={val:0,inv:0,txns:[],fundRows:[],fundCount:0};
+    natMap[cat].val+=val;
+    const fInv=f.txns.reduce((s,t)=>s+t.a,0);
+    natMap[cat].inv+=fInv;
+    natMap[cat].fundCount++;
+    natMap[cat].fundRows.push({f,val,inv:fInv,x,color});
+    f.txns.forEach(t=>natMap[cat].txns.push(t));
+  });
+  const natArr=Object.entries(natMap).sort((a,b)=>b[1].val-a[1].val);
+  const natGrid=document.getElementById('natureGrid');natGrid.innerHTML='';
+  natArr.forEach(([cat,data])=>{
+    const share=(data.val/tVal*100);
+    const color=NAT_PAL[cat]||NAT_PAL['Other'];
+    const natXirr=xirr(data.txns,data.val,td);
+    const fundRowsHtml=data.fundRows.sort((a,b)=>(b.x??-Infinity)-(a.x??-Infinity)).map(({f,val:fval,inv:finv,x:fx,color:fc})=>{
+      const fShare=(fval/data.val*100).toFixed(1);
+      const shortName=f.name.length>34?f.name.slice(0,32)+'…':f.name;
+      const xc=fx!=null?(fx>=0?'var(--ac)':'var(--rd)'):'var(--mu)';
+      return `<div class="nat-fund-row">
+        <div class="nat-fund-dot" style="background:${fc}"></div>
+        <div class="nat-fund-info"><div class="nat-fund-name">${shortName}</div><div class="nat-fund-isin">${f.isin}</div><div class="nat-fund-inv">Inv: ${fmt(finv)}</div></div>
+        <div class="nat-fund-nums"><span class="nat-fund-val">${fmt(fval)}</span><div class="nat-fund-sub"><span class="nat-fund-pct" style="color:${color}">${fShare}%</span><span class="nat-fund-xirr" style="color:${xc}">${fx!=null?pct(fx):'—'}</span></div></div>
+      </div>`;
+    }).join('');
+    const card=document.createElement('div');
+    card.className='nat-card';
+    card.innerHTML=`
+      <div style="position:absolute;top:0;left:0;width:3px;height:100%;background:${color};border-radius:2px 0 0 2px"></div>
+      <span class="nat-toggle">⌄</span>
+      <div class="nat-name" style="color:${color}">${cat}</div>
+      <div class="nat-val">${fmt(data.val)}</div>
+      <div class="nat-funds">${data.fundCount} fund${data.fundCount>1?'s':''}</div>
+      <div class="nat-inv-row"><span class="nat-inv-lbl">Invested</span><div><div class="nat-inv-val">${fmt(data.inv)}</div><div class="nat-gain" style="color:${data.val>=data.inv?'var(--ac)':'var(--rd)'}">${data.val>=data.inv?'+':''}${fmt(data.val-data.inv)} (${((data.val-data.inv)/data.inv*100).toFixed(1)}%)</div></div></div>
+      <div class="nat-meta"><span style="font-family:'DM Mono',monospace;font-size:10px;color:var(--lb)">of total</span><div class="nat-pct-wrap"><div class="nat-pct-fill" style="width:${Math.min(share,100).toFixed(1)}%;background:${color}"></div></div><span class="nat-pct-lbl" style="color:${color}">${share.toFixed(1)}%</span></div>
+      <div class="nat-xirr"><span class="nat-xirr-lbl">Weighted XIRR</span><span class="nat-xirr-val" style="color:${natXirr!=null?(natXirr>=0?'var(--ac)':'var(--rd)'):'var(--mu)'}">${natXirr!=null?pct(natXirr):'—'}</span></div>
+      <div class="nat-detail">${fundRowsHtml}</div>`;
+    card.addEventListener('click',()=>card.classList.toggle('open'));
+    natGrid.appendChild(card);
+  });
+}
+init();
+</script>
+<script>
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
