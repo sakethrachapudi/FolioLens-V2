@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0e1117">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="FolioLens">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<title>FolioLens — Family Dashboard</title>
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <div class="brand-mark">FL</div>
+    <div class="brand-name">FolioLens</div>
+    <div class="brand-sub" id="dataFreshness">Loading…</div>
+  </div>
+  <div class="tabs">
+    <button class="tab-btn" data-key="fam">Family</button>
+    <button class="tab-btn" data-key="s">Saketh</button>
+    <button class="tab-btn" data-key="su">Suneetha</button>
+    <button class="tab-btn" data-key="sa">Samhitha</button>
+  </div>
+</header>
+
+<div class="page">
+
+  <!-- ============ FAMILY TAB ============ -->
+  <div class="tab-panel" id="panel-fam">
+    <div class="ptop">
+      <div class="ptitle">
+        <div class="pname">Family Portfolio</div>
+        <div class="psub">Combined view across all three portfolios</div>
+      </div>
+    </div>
+
+    <div class="cards">
+      <div class="card"><div class="cl">Total Invested</div><div class="cv" id="fam-inv">—</div></div>
+      <div class="card"><div class="cl">Current Value</div><div class="cv" id="fam-val">—</div><div class="cs" id="fam-gain"></div></div>
+      <div class="card ac"><div class="cl">Family XIRR</div><div class="cv" id="fam-xirr">—</div><div class="cs">pooled cashflow return</div></div>
+      <div class="card"><div class="cl">Total Gain</div><div class="cv" id="fam-gainAbs">—</div><div class="cs" id="fam-mult">—</div></div>
+    </div>
+
+    <div class="chart-row">
+      <div class="cc chart-box">
+        <div class="ct">Growth Over Time — All Portfolios</div>
+        <div class="chart-wrap"><canvas id="fam-growthChart"></canvas></div>
+      </div>
+      <div class="cc chart-box chart-box-sm">
+        <div class="ct">Family Allocation by Category</div>
+        <div class="chart-wrap"><canvas id="fam-allocChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="sec-header open" onclick="this.classList.toggle('open')">
+      <div class="sec-title">Portfolio Comparison</div>
+      <div class="sec-right"><span class="sec-chevron">⌄</span></div>
+    </div>
+    <div class="sec-body">
+      <div class="tw">
+        <table>
+          <thead><tr><th>Portfolio</th><th class="r">Invested</th><th class="r">Value</th><th class="r">Gain</th><th class="r">XIRR</th></tr></thead>
+          <tbody id="fam-compareBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="sec-header" onclick="this.classList.toggle('open')">
+      <div class="sec-title">Year-wise Growth (Pooled)</div>
+      <div class="sec-right"><span class="sec-chevron">⌄</span></div>
+    </div>
+    <div class="sec-body"><div class="yr-grid" id="fam-yrGrid"></div></div>
+
+    <div class="sec-header" onclick="this.classList.toggle('open')">
+      <div class="sec-title">Nature-wise Breakdown (Pooled)</div>
+      <div class="sec-right"><span class="sec-chevron">⌄</span></div>
+    </div>
+    <div class="sec-body"><div class="nature-grid" id="fam-natureGrid"></div></div>
+  </div>
+
+  <!-- ============ SAKETH / SUNEETHA / SAMHITHA TABS (injected by app.js from panels.js) ============ -->
+  <div class="tab-panel" id="panel-s"><div id="s-panel-mount"></div></div>
+  <div class="tab-panel" id="panel-su"><div id="su-panel-mount"></div></div>
+  <div class="tab-panel" id="panel-sa"><div id="sa-panel-mount"></div></div>
+
+  <div class="meta-foot">FolioLens · data refreshed every 6 hours via GitHub Actions</div>
+</div>
+
+<!-- bottom nav (mobile) -->
+<nav class="bottom-nav">
+  <button class="bn-btn" data-key="fam"><span class="bn-dot"></span>Family</button>
+  <button class="bn-btn" data-key="s"><span class="bn-dot"></span>Saketh</button>
+  <button class="bn-btn" data-key="su"><span class="bn-dot"></span>Suneetha</button>
+  <button class="bn-btn" data-key="sa"><span class="bn-dot"></span>Samhitha</button>
+</nav>
+
+<!-- Add Transaction modal -->
+<div class="modal-overlay" id="txnModalOverlay">
+  <div class="modal">
+    <h3 id="txnModalTitle">Add Transaction</h3>
+    <div class="field">
+      <label>Fund</label>
+      <select id="txnFundSelect"></select>
+    </div>
+    <div id="txnNewFundBlock" style="display:none">
+      <div class="field"><label>ISIN</label><input type="text" id="txnNewIsin" placeholder="e.g. INF090I01171"></div>
+      <div class="field"><label>Fund Name</label><input type="text" id="txnNewName" placeholder="e.g. Parag Parikh Flexi Cap"></div>
+      <div class="field"><label>Category</label><input type="text" id="txnNewCat" placeholder="e.g. Flexi Cap"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Type</label>
+        <select id="txnType"><option value="buy">Buy / SIP</option><option value="sell">Sell / Withdrawal</option></select>
+      </div>
+      <div class="field"><label>Date</label><input type="date" id="txnDate"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Amount (₹)</label><input type="number" id="txnAmount" placeholder="10000"></div>
+      <div class="field"><label>NAV (optional)</label><input type="number" step="0.01" id="txnNav" placeholder="auto"></div>
+    </div>
+    <div class="err-box" id="txnError"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="closeTxnModal()">Cancel</button>
+      <button class="btn primary" id="txnSubmitBtn" onclick="submitTxn()">Save Transaction</button>
+    </div>
+    <details class="setup-note">
+      <summary>⚙ First time using this? Your Apps Script needs a small update to accept writes.</summary>
+      <p style="font-size:11.5px;color:var(--tx2)">Open your Apps Script project, add this <code>doPost</code> function (adjust the sheet-append line to match your actual column order), then redeploy the web app.</p>
+      <pre id="setupCode">function doPost(e) {
+  var payload = JSON.parse(e.postData.contents);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(payload.sheet);
+  if (!sheet) return ContentService.createTextOutput(JSON.stringify({error:'Sheet not found'})).setMimeType(ContentService.MimeType.JSON);
+
+  // TODO: match this row to your actual sheet's column order
+  sheet.appendRow([
+    payload.isin, payload.name || '', payload.cat || '',
+    payload.date, payload.amount, payload.units || '', payload.nav || ''
+  ]);
+
+  return ContentService.createTextOutput(JSON.stringify({ok:true}))
+    .setMimeType(ContentService.MimeType.JSON);
+}</pre>
+      <button class="btn ghost copy-btn" onclick="copySetupCode()">Copy code</button>
+    </details>
+  </div>
+</div>
+
+<!-- NAV history modal -->
+<div class="modal-overlay" id="navModalOverlay">
+  <div class="modal">
+    <h3 id="navModalTitle">Fund</h3>
+    <div class="psub" id="navModalSub" style="margin-bottom:12px"></div>
+    <div class="chart-wrap" style="height:260px">
+      <canvas id="navHistChart"></canvas>
+      <div id="navHistEmpty" style="display:none;text-align:center;color:var(--tx2);font-size:12px;padding-top:100px">
+        NAV history for this fund will appear after the next scheduled data refresh.
+      </div>
+    </div>
+    <div class="modal-actions"><button class="btn ghost" style="flex:1" onclick="closeNavHistory()">Close</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="panels.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
