@@ -127,7 +127,7 @@ function captureYearEndNAVs() {
 
   isins.forEach(isin => {
     if (existing.has(isin)) return;
-    const schemeCode = ISIN_SCHEME[isin];
+    const schemeCode = resolveSchemeCode(isin);
     if (!schemeCode) return;
     try {
       const url = `https://api.mfapi.in/mf/${schemeCode}`;
@@ -161,6 +161,91 @@ function captureYearEndNAVs() {
 
   Logger.log('Year-end NAV capture complete for ' + prevYear);
 }
+
+/**
+ * RUN THIS ONCE MANUALLY (function dropdown above the editor -> select it -> Run).
+ * captureYearEndNAVs() only ever captures the single year that just ended — it has no
+ * way to backfill older years. If your NAV_Snapshots sheet doesn't already have an entry
+ * for every (fund, year) combination in your transaction history, the dashboard's
+ * "End Value" for those years silently falls back to your last transaction's NAV that
+ * year instead of the true Dec-31 NAV. This fills in every gap, going back to each
+ * fund's earliest transaction, using one mfapi.in call per fund (not one per year).
+ * Safe to re-run — it only fills gaps, never duplicates existing entries.
+ */
+function backfillAllYearEndNAVs() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const snapshotWs = ss.getSheetByName('NAV_Snapshots');
+  if (!snapshotWs) { Logger.log('NAV_Snapshots sheet not found — create it first (columns: ISIN, Year, NAV, Date).'); return; }
+
+  const currentYear = new Date().getFullYear();
+
+  const isinEarliestYear = {};
+  ALLOWED_SHEETS.forEach(sheetName => {
+    const ws = ss.getSheetByName(sheetName);
+    if (!ws) return;
+    const data = ws.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      const isin = data[i][1] ? data[i][1].toString().trim() : null;
+      if (!isin || !data[i][3]) continue;
+      const d = formatDate(data[i][3]);
+      if (!d) continue;
+      const yr = parseInt(d.slice(0, 4));
+      if (!isinEarliestYear[isin] || yr < isinEarliestYear[isin]) isinEarliestYear[isin] = yr;
+    }
+  });
+
+  const existing = new Set();
+  const snapData = snapshotWs.getDataRange().getValues();
+  for (let i = 1; i < snapData.length; i++) {
+    if (snapData[i][0] && snapData[i][1]) existing.add(`${snapData[i][0].toString().trim()}_${snapData[i][1].toString().trim()}`);
+  }
+
+  let saved = 0, skippedFunds = 0;
+  Object.keys(isinEarliestYear).forEach(isin => {
+    const schemeCode = resolveSchemeCode(isin);
+    if (!schemeCode) { Logger.log(`Could not resolve a scheme code for ${isin} (checked ISIN_SCHEME and AMFI's index) — skipping.`); skippedFunds++; return; }
+
+    const yearsNeeded = [];
+    for (let y = isinEarliestYear[isin]; y < currentYear; y++) {
+      if (!existing.has(`${isin}_${y}`)) yearsNeeded.push(y);
+    }
+    if (!yearsNeeded.length) return;
+
+    try {
+      const response = UrlFetchApp.fetch(`https://api.mfapi.in/mf/${schemeCode}`, { muteHttpExceptions: true });
+      if (response.getResponseCode() !== 200) { Logger.log(`mfapi fetch failed for ${isin}`); return; }
+      const data = JSON.parse(response.getContentText());
+      if (!data.data || !data.data.length) return;
+
+      yearsNeeded.forEach(y => {
+        const yearStr = y.toString();
+        let yearEndNav = null, yearEndDate = null;
+        for (const entry of data.data) {
+          const parts = entry.date.split('-'); // dd-mm-yyyy, newest first
+          if (parts.length !== 3) continue;
+          if (parts[2] === yearStr) {
+            yearEndNav = parseFloat(entry.nav);
+            yearEndDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+            break;
+          }
+          if (parts[2] < yearStr) break;
+        }
+        if (yearEndNav && yearEndDate) {
+          snapshotWs.appendRow([isin, yearStr, yearEndNav, yearEndDate]);
+          saved++;
+        } else {
+          Logger.log(`No mfapi data for ${isin} in ${yearStr} (fund likely didn't exist yet that year — not an error).`);
+        }
+      });
+    } catch (e) {
+      Logger.log(`Error for ${isin}: ${e.message}`);
+    }
+    Utilities.sleep(200);
+  });
+
+  Logger.log(`Backfill complete — saved ${saved} year-end snapshots across ${Object.keys(isinEarliestYear).length - skippedFunds} funds (${skippedFunds} funds had no ISIN_SCHEME mapping).`);
+}
+
 
 function setupYearEndTrigger() {
   ScriptApp.getProjectTriggers().forEach(t => {
@@ -326,8 +411,50 @@ function findRowById(ws, id) {
   return -1;
 }
 
+/**
+ * Resolves an ISIN to an mfapi.in scheme code. Checks the static ISIN_SCHEME map first
+ * (fast, no network call), then a cached lookup from a previous resolution, then falls
+ * back to AMFI's public scheme index (NAVAll.txt) to find the code for funds not yet
+ * known. The actual NAV always comes from mfapi.in -- AMFI is only ever used here to
+ * find the *code*, never as a source of NAV data itself.
+ */
+function resolveSchemeCode(isin) {
+  if (ISIN_SCHEME[isin]) return ISIN_SCHEME[isin];
+  const props = PropertiesService.getScriptProperties();
+  const cached = props.getProperty('scheme_' + isin);
+  if (cached) return cached;
+  const found = findSchemeCodeByISIN(isin);
+  if (found) props.setProperty('scheme_' + isin, found);
+  return found;
+}
+
+function findSchemeCodeByISIN(isin) {
+  try {
+    const res = UrlFetchApp.fetch('https://www.amfiindia.com/spages/NAVAll.txt', { muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) return null;
+    const text = res.getContentText();
+    const lines = text.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.indexOf(isin) === -1) continue; // quick pre-filter, avoids splitting every line
+      const cols = line.split(';');
+      if (cols.length < 4) continue;
+      const code = (cols[0] || '').trim();
+      const isinGrowth = (cols[1] || '').trim();
+      const isinReinvest = (cols[2] || '').trim();
+      if ((isinGrowth === isin || isinReinvest === isin) && /^\d+$/.test(code)) {
+        return code;
+      }
+    }
+    return null;
+  } catch (e) {
+    Logger.log(`AMFI lookup failed for ${isin}: ${e.message}`);
+    return null;
+  }
+}
+
 function fetchLiveNav(isin) {
-  const schemeCode = ISIN_SCHEME[isin];
+  const schemeCode = resolveSchemeCode(isin);
   if (!schemeCode) return null;
   try {
     const res = UrlFetchApp.fetch(`https://api.mfapi.in/mf/${schemeCode}`, { muteHttpExceptions: true });

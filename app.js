@@ -19,10 +19,26 @@ const TAB_ORDER = ['fam', 's', 'su', 'sa'];
 const ISIN_SCHEME = {"INF090I01171":100471,"INF179K01608":101762,"INF789F01810":102394,"INF200K01370":102756,"INF174K01211":102875,"INF760K01167":102920,"INF789F01AG5":103098,"INF090I01841":103151,"INF204K01GE7":104637,"INF179K01CR2":105758,"INF090I01981":105817,"INF740K01037":105875,"INF109K01BL4":108466,"INF769K01101":112932,"INF846K01859":114564,"INF740K01LP6":117691,"INF754K01CE0":118624,"INF204K01XF9":118650,"INF204K01E54":118668,"INF179K01UT0":118955,"INF179K01XQ0":118989,"INF179K01XZ1":119062,"INF200K01RY0":119609,"INF174K01JP2":119750,"INF200K01UT4":119800,"INF109K01Y07":120251,"INF109K015K4":120334,"INF109K01S39":120616,"INF966L01689":120828,"INF879O01027":122639,"INF879O01019":122640,"INF179KA1RW5":130503,"INF200KA1473":133858,"INF277K01Z44":135797,"INF205K013T3":145137,"INF194KB1AL4":147946,"INF204KB19V4":148457,"INF109KC1O90":148653,"INF879O01175":148958,"INF109KC1R14":148990,"INF174KA1HV3":149185,"INF179KC1BV9":149366,"INF846K013E0":149383,"INF204KC1BL9":152034};
 
 const PAL = ['#4ade80','#22d3ee','#f5c542','#d8b4fe','#f87171','#60a5fa','#fb923c','#a3e635','#e879f9','#38bdf8','#fbbf24','#34d399'];
-const NAT_PAL = { 'Large Cap':'#4ade80','Mid Cap':'#22d3ee','Small Cap':'#f5c542','Flexi Cap':'#d8b4fe',
-  'Multi Cap':'#f87171','ELSS':'#60a5fa','Debt':'#fb923c','Hybrid':'#a3e635','Index':'#e879f9',
-  'International':'#38bdf8','Gold':'#fbbf24','Other':'#4a5568' };
-const catColor = c => NAT_PAL[c] || NAT_PAL.Other;
+
+// Category colors are assigned dynamically -- not from a hardcoded name list. Each
+// distinct category (whatever text is already in your Sheet's Category column) gets
+// the next unused color from the palette, in the order it's first encountered. This
+// guarantees no two categories share a color (as long as you have fewer categories
+// than palette entries), stays consistent across every tab, and needs no maintenance
+// as you add new categories.
+const CATEGORY_PALETTE = ['#4ade80','#22d3ee','#f5c542','#d8b4fe','#f87171','#60a5fa','#fb923c','#a3e635',
+  '#e879f9','#38bdf8','#fbbf24','#34d399','#c084fc','#fb7185','#2dd4bf','#facc15','#818cf8','#f472b6',
+  '#a78bfa','#fdba74'];
+let categoryColorMap = {};
+function catColor(cat) {
+  const key = (cat || 'Other').trim() || 'Other';
+  if (categoryColorMap[key]) return categoryColorMap[key];
+  const used = new Set(Object.values(categoryColorMap));
+  const free = CATEGORY_PALETTE.find(c => !used.has(c));
+  const color = free || CATEGORY_PALETTE[Object.keys(categoryColorMap).length % CATEGORY_PALETTE.length];
+  categoryColorMap[key] = color;
+  return color;
+}
 
 /* ---------- utils ---------- */
 const fmt   = n => '₹' + Math.round(n || 0).toLocaleString('en-IN');
@@ -636,7 +652,24 @@ function exportTxnCSV(key) {
 let modalMode = 'add';   // 'add' | 'edit'
 let modalEditId = null;
 
+/* ============================================================
+   PIN GATE (soft guard against accidental taps, not real security --
+   this is a public static site, so a determined person could always
+   find the Apps Script URL directly. Change DASHBOARD_PIN to whatever
+   you like; it's visible in this file's source, same as everything else here.)
+   ============================================================ */
+const DASHBOARD_PIN = '2026';
+function checkPinUnlock() {
+  if (sessionStorage.getItem('fl_unlocked') === '1') return true;
+  const entered = prompt('Enter PIN to add/edit/delete transactions:');
+  if (entered === null) return false;
+  if (entered === DASHBOARD_PIN) { sessionStorage.setItem('fl_unlocked', '1'); return true; }
+  toast('Incorrect PIN');
+  return false;
+}
+
 function openAddTxn(key) {
+  if (!checkPinUnlock()) return;
   modalKey = key; modalMode = 'add'; modalEditId = null;
   document.getElementById('txnModalTitle').textContent = `Add Transaction — ${PORTFOLIOS[key].label}`;
   const sel = document.getElementById('txnFundSelect');
@@ -654,6 +687,7 @@ function openAddTxn(key) {
 }
 
 function openEditTxn(key, id) {
+  if (!checkPinUnlock()) return;
   const txn = (uiState[key].allTxns || []).find(t => t.id === id);
   if (!txn) { toast('Could not find that transaction'); return; }
   modalKey = key; modalMode = 'edit'; modalEditId = id;
@@ -727,6 +761,7 @@ async function submitTxn() {
 }
 
 async function deleteTxn(key, id) {
+  if (!checkPinUnlock()) return;
   const txn = (uiState[key].allTxns || []).find(t => t.id === id);
   if (!txn) { toast('Could not find that transaction'); return; }
   const isBuy = txn.a >= 0;

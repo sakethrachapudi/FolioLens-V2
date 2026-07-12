@@ -26,6 +26,7 @@ header.top{position:sticky;top:0;z-index:40;background:rgba(14,17,23,.92);backdr
 .tab-btn[data-key="sa"].active{background:#d8b4fe;border-color:#d8b4fe;}
 
 .page{max-width:920px;margin:0 auto;padding:14px 12px 40px;}
+@media(min-width:1024px){ .page{max-width:1200px;padding:20px 24px 48px;} }
 .tab-panel{display:none;}
 .tab-panel.active{display:block;animation:fadein .2s ease;}
 @keyframes fadein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
