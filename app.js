@@ -224,11 +224,13 @@ function renderPortfolio(key) {
   document.getElementById(`${key}-inv`).textContent = fmt(t.invested);
   document.getElementById(`${key}-invSub`).textContent = `${t.fundCount} funds`;
   document.getElementById(`${key}-val`).textContent = fmt(t.value);
+  const withdrawn = t.withdrawn || 0;
   const gain = t.gain, gp = t.invested ? gain / t.invested * 100 : 0;
-  document.getElementById(`${key}-gain`).innerHTML = `<span class="${posC(gain)}">${gain>=0?'+':''}${fmt(gain)} (${pct(gp)})</span>`;
+  document.getElementById(`${key}-gain`).innerHTML = `<span class="${posC(gain)}">${gain>=0?'+':''}${fmt(gain)} (${pct(gp)})</span>`
+    + (withdrawn > 0 ? ` <span class="fund-cat">· ${fmt(withdrawn)} withdrawn</span>` : '');
   document.getElementById(`${key}-xirr`).innerHTML = `<span class="${posC(t.xirr)}">${t.xirr!=null?pct(t.xirr):'—'}</span>`;
   document.getElementById(`${key}-gainAbs`).innerHTML = `<span class="${posC(gain)}">${gain>=0?'+':'-'}${fmt(Math.abs(gain))}</span>`;
-  document.getElementById(`${key}-mult`).textContent = t.invested ? `${(t.value/t.invested).toFixed(2)}x invested` : '—';
+  document.getElementById(`${key}-mult`).textContent = t.invested ? `${((t.value+withdrawn)/t.invested).toFixed(2)}x invested (incl. withdrawn)` : '—';
 
   const rows = p.funds.map((f, i) => ({ ...f, color: PAL[i % PAL.length] }));
   uiState[key].allRows = rows;
@@ -324,12 +326,22 @@ function renderNature(key, nature, totalVal) {
 
 function renderSWP(key, swp) {
   document.getElementById(`${key}-swpWithdrawn`).textContent = fmt(swp.totalWithdrawn);
-  document.getElementById(`${key}-swpCount`).textContent = `${swp.withdrawalCount} withdrawals`;
-  document.getElementById(`${key}-swpAvgMonthly`).textContent = fmt(swp.avgMonthly);
-  document.getElementById(`${key}-swpRunway`).textContent = swp.runwayMonths ? `${(swp.runwayMonths/12).toFixed(1)} yrs` : '—';
-  document.getElementById(`${key}-swpSustain`).innerHTML = swp.sustainable
-    ? `<span class="up">Sustainable</span>` : `<span class="down">Drawing principal</span>`;
-  document.getElementById(`${key}-swpSustainSub`).textContent = `withdrawing ${swp.annualWithdrawalRatePct.toFixed(1)}%/yr`;
+  document.getElementById(`${key}-swpCount`).textContent = `${swp.withdrawalCount} withdrawals (all-time)`;
+
+  if (swp.avgMonthly > 0) {
+    document.getElementById(`${key}-swpAvgMonthly`).textContent = fmt(swp.avgMonthly);
+    document.getElementById(`${key}-swpAvgSub`).textContent = `${fmt(swp.yearWithdrawn)} over ${swp.monthsElapsed} mo in ${swp.currentYear}`;
+    document.getElementById(`${key}-swpRunway`).textContent = swp.runwayMonths ? `${(swp.runwayMonths/12).toFixed(1)} yrs` : '—';
+    document.getElementById(`${key}-swpSustain`).innerHTML = swp.sustainable
+      ? `<span class="up">Sustainable</span>` : `<span class="down">Drawing principal</span>`;
+    document.getElementById(`${key}-swpSustainSub`).textContent = `withdrawing ${swp.annualWithdrawalRatePct.toFixed(1)}%/yr vs XIRR`;
+  } else {
+    document.getElementById(`${key}-swpAvgMonthly`).textContent = '—';
+    document.getElementById(`${key}-swpAvgSub`).textContent = `no withdrawals yet in ${swp.currentYear}`;
+    document.getElementById(`${key}-swpRunway`).textContent = '—';
+    document.getElementById(`${key}-swpSustain`).innerHTML = `<span class="fund-cat">Not enough data</span>`;
+    document.getElementById(`${key}-swpSustainSub`).textContent = `waiting on ${swp.currentYear} withdrawals`;
+  }
 }
 
 /* ---------- transaction log (search + pagination) ---------- */
@@ -437,12 +449,14 @@ function closeNavHistory() { document.getElementById('navModalOverlay').classLis
 function renderFamily() {
   const today = td();
   const t = famData.totals;
+  const famWithdrawn = t.withdrawn || 0;
   document.getElementById('fam-inv').textContent = fmt(t.invested);
   document.getElementById('fam-val').textContent = fmt(t.value);
-  document.getElementById('fam-gain').innerHTML = `<span class="${posC(t.gain)}">${t.gain>=0?'+':''}${fmt(t.gain)}</span>`;
+  document.getElementById('fam-gain').innerHTML = `<span class="${posC(t.gain)}">${t.gain>=0?'+':''}${fmt(t.gain)}</span>`
+    + (famWithdrawn > 0 ? ` <span class="fund-cat">· ${fmt(famWithdrawn)} withdrawn</span>` : '');
   document.getElementById('fam-xirr').innerHTML = `<span class="${posC(t.xirr)}">${t.xirr!=null?pct(t.xirr):'—'}</span>`;
   document.getElementById('fam-gainAbs').innerHTML = `<span class="${posC(t.gain)}">${t.gain>=0?'+':'-'}${fmt(Math.abs(t.gain))}</span>`;
-  document.getElementById('fam-mult').textContent = t.invested ? `${(t.value/t.invested).toFixed(2)}x invested` : '—';
+  document.getElementById('fam-mult').textContent = t.invested ? `${((t.value+famWithdrawn)/t.invested).toFixed(2)}x invested (incl. withdrawn)` : '—';
 
   const cb = document.getElementById('fam-compareBody');
   cb.innerHTML = famData.compare.map(r => {
@@ -537,7 +551,8 @@ async function refreshLive(key, silent) {
   p.totals.fundCount = p.funds.length;
   const allTxnsCF = p.funds.flatMap(f => f.txns);
   p.totals.xirr = xirr(allTxnsCF, p.totals.value, today);
-  p.totals.gain = p.totals.value - p.totals.invested;
+  p.totals.withdrawn = p.funds.reduce((s,f) => s + f.txns.filter(t=>t.a<0).reduce((s2,t)=>s2+Math.abs(t.a),0), 0);
+  p.totals.gain = (p.totals.value + p.totals.withdrawn) - p.totals.invested;
   const ranked = [...p.funds].filter(f=>f.xirr!=null).sort((a,b)=>b.xirr-a.xirr);
   p.gainers = ranked.slice(0,3).map(g=>({isin:g.isin,name:g.name,xirr:g.xirr}));
   p.losers = ranked.slice(-3).reverse().map(g=>({isin:g.isin,name:g.name,xirr:g.xirr}));
@@ -563,19 +578,18 @@ function recomputeSWP(funds, totalValue, portXirr, todayStr) {
   const allTxns = funds.flatMap(f => f.txns);
   const withdrawals = allTxns.filter(t => t.a < 0);
   const totalWithdrawn = withdrawals.reduce((s,t) => s+Math.abs(t.a), 0);
-  const cutoff = new Date(today); cutoff.setDate(cutoff.getDate() - 365);
-  const recent = withdrawals.filter(t => new Date(t.d) >= cutoff);
-  const pool = recent.length ? recent : withdrawals;
-  let avgMonthly = 0;
-  if (pool.length) {
-    const earliest = new Date(Math.min(...pool.map(t => new Date(t.d))));
-    const spanDays = Math.max(1, (today - earliest) / 86400000);
-    avgMonthly = pool.reduce((s,t) => s+Math.abs(t.a), 0) / Math.max(1, spanDays / 30.44);
-  }
+
+  const currentYear = String(today.getFullYear());
+  const yrWithdrawals = withdrawals.filter(t => t.d.slice(0,4) === currentYear);
+  const yearWithdrawn = yrWithdrawals.reduce((s,t) => s+Math.abs(t.a), 0);
+  const monthsElapsed = today.getMonth() + 1; // Jan=1 ... Dec=12
+  const avgMonthly = monthsElapsed > 0 ? yearWithdrawn / monthsElapsed : 0;
+
   const runwayMonths = avgMonthly > 0 ? totalValue / avgMonthly : null;
   const annualWithdrawalRatePct = totalValue > 0 ? avgMonthly * 12 / totalValue * 100 : 0;
-  const sustainable = portXirr != null && annualWithdrawalRatePct < portXirr;
-  return { totalWithdrawn, withdrawalCount: withdrawals.length, avgMonthly, runwayMonths, annualWithdrawalRatePct, sustainable };
+  const sustainable = avgMonthly > 0 ? (portXirr != null && annualWithdrawalRatePct < portXirr) : null;
+  return { totalWithdrawn, withdrawalCount: withdrawals.length, avgMonthly, runwayMonths,
+    annualWithdrawalRatePct, sustainable, yearWithdrawn, monthsElapsed, currentYear };
 }
 
 /* keeps the Family tab consistent with whatever's freshest in `cache` after any live refresh */
@@ -584,7 +598,8 @@ function syncFamilyFromCache(navSnapshots, today) {
   const keys = Object.keys(PORTFOLIOS);
   famData.totals.invested = keys.reduce((s,k) => s + (cache[k]?.totals.invested || 0), 0);
   famData.totals.value = keys.reduce((s,k) => s + (cache[k]?.totals.value || 0), 0);
-  famData.totals.gain = famData.totals.value - famData.totals.invested;
+  famData.totals.withdrawn = keys.reduce((s,k) => s + (cache[k]?.totals.withdrawn || 0), 0);
+  famData.totals.gain = (famData.totals.value + famData.totals.withdrawn) - famData.totals.invested;
   const allTxnsCF = keys.flatMap(k => (cache[k]?.funds || []).flatMap(f => f.txns));
   famData.totals.xirr = xirr(allTxnsCF, famData.totals.value, today);
   famData.compare = keys.map(k => ({ sheet: PORTFOLIOS[k].sheet, label: PORTFOLIOS[k].label, accent: PORTFOLIOS[k].accent,
