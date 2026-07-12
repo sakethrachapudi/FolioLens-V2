@@ -1,8 +1,7 @@
 const SHEET_ID = '1rRAjgjopXY6_qnmmodC6-F5fFC6eEjECu5SNmLTNj_Q';
 const ALLOWED_SHEETS = ['Saketh', 'Suneetha', 'Samhitha', 'Babu'];
+const ID_COL = 8; // column H
 
-// Hoisted to top-level so both captureYearEndNAVs() and the new doPost()/fetchLiveNav()
-// can share the same map instead of keeping two copies in sync.
 const ISIN_SCHEME = {
   "INF090I01171":100471,"INF179K01608":101762,"INF789F01810":102394,
   "INF200K01370":102756,"INF174K01211":102875,"INF760K01167":102920,
@@ -49,12 +48,13 @@ function doGet(e) {
       const type  = (row[4] || 'buy').toString().toLowerCase().trim();
       const units = parseFloat(row[5]) || 0;
       const price = parseFloat(row[6]) || 0;
+      const id    = row[7] ? row[7].toString().trim() : '';
       if (!date || units === 0 || price === 0) continue;
       if (!txnsByIsin[isin]) {
         txnsByIsin[isin] = [];
         metaByIsin[isin] = { name: row[0].toString(), cat: (row[2] || 'Other').toString() };
       }
-      txnsByIsin[isin].push({ d: date, n: price, u: units, a: round2(units * price), type });
+      txnsByIsin[isin].push({ d: date, n: price, u: units, a: round2(units * price), type, id });
     }
 
     const funds = Object.entries(txnsByIsin).map(([isin, txns]) => {
@@ -65,8 +65,8 @@ function doGet(e) {
       const totalInvest = round2(buys.reduce((s,t) => s+t.a, 0));
       const lastNav     = txns[txns.length - 1].n;
       const xirrTxns   = [
-        ...buys.map(t  => ({ d: t.d, n: t.n, u: t.u, a:  t.a })),
-        ...sells.map(t => ({ d: t.d, n: t.n, u: t.u, a: -t.a }))
+        ...buys.map(t  => ({ d: t.d, n: t.n, u: t.u, a:  t.a, id: t.id })),
+        ...sells.map(t => ({ d: t.d, n: t.n, u: t.u, a: -t.a, id: t.id }))
       ].sort((a, b) => a.d.localeCompare(b.d));
       return {
         name: metaByIsin[isin].name,
@@ -176,69 +176,154 @@ function setupYearEndTrigger() {
 }
 
 /**
- * Handles "Add Transaction" from the dashboard.
- * Expects JSON body: { sheet, isin, date, amount, nav?, units?, name?, cat?, isNewFund? }
- *   - amount: positive = buy, negative = sell/withdrawal
- *   - nav: optional — if omitted, fetched live from mfapi.in using ISIN_SCHEME
- *   - units: optional — if omitted, computed as amount / nav
- *   - name/cat: required only for a brand-new fund (isNewFund: true); otherwise
- *               looked up automatically from the fund's existing rows in the sheet.
+ * RUN THIS ONCE MANUALLY (select it in the function dropdown above the editor, click Run).
+ * Adds a "TxnID" column (H) to every sheet and assigns a unique ID to every existing row
+ * that doesn't have one yet. Safe to re-run — it skips rows that already have an ID.
+ */
+function backfillTxnIDs() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  ALLOWED_SHEETS.forEach(sheetName => {
+    const ws = ss.getSheetByName(sheetName);
+    if (!ws) return;
+    const header = ws.getRange(1, ID_COL);
+    if (header.getValue() !== 'TxnID') header.setValue('TxnID');
+
+    const lastRow = ws.getLastRow();
+    if (lastRow < 2) return;
+    const idRange = ws.getRange(2, ID_COL, lastRow - 1, 1);
+    const ids = idRange.getValues();
+    let changed = 0;
+    for (let i = 0; i < ids.length; i++) {
+      if (!ids[i][0]) { ids[i][0] = Utilities.getUuid(); changed++; }
+    }
+    if (changed) idRange.setValues(ids);
+    Logger.log(`${sheetName}: assigned ${changed} new IDs (${ids.length - changed} already had one)`);
+  });
+  Logger.log('Backfill complete for all sheets.');
+}
+
+/**
+ * Handles Add / Edit / Delete transaction calls from the dashboard.
+ * body.action: 'add_txn' (default) | 'edit_txn' | 'delete_txn'
  */
 function doPost(e) {
   try {
     const body = JSON.parse(e.postData.contents);
-    const sheet = body.sheet;
-    if (!sheet || !ALLOWED_SHEETS.includes(sheet)) {
-      return respond(null, { error: 'Invalid or missing sheet name' });
-    }
-    const isin = (body.isin || '').toString().trim();
-    const date = (body.date || '').toString().trim();
-    const amount = parseFloat(body.amount);
-    if (!isin || !date || !amount) {
-      return respond(null, { error: 'isin, date and amount are required' });
-    }
-
-    const ws = SpreadsheetApp.openById(SHEET_ID).getSheetByName(sheet);
-    if (!ws) return respond(null, { error: `Sheet "${sheet}" not found` });
-
-    const type = amount < 0 ? 'sell' : 'buy';
-    const amountAbs = Math.abs(amount);
-
-    // NAV: use what was sent, else fetch live from mfapi.in
-    let nav = parseFloat(body.nav);
-    if (!nav || isNaN(nav)) {
-      nav = fetchLiveNav(isin);
-      if (!nav) {
-        return respond(null, { error: 'Could not auto-fetch NAV for this fund — please enter it manually.' });
-      }
-    }
-
-    // Units: use what was sent, else derive from amount / nav
-    let units = parseFloat(body.units);
-    if (!units || isNaN(units)) units = amountAbs / nav;
-    units = Math.abs(units);
-
-    // Name/category: use what was sent (new fund), else look up from existing rows
-    let name = (body.name || '').toString().trim();
-    let cat  = (body.cat  || '').toString().trim();
-    if (!name || !cat) {
-      const existing = lookupExistingFund(ws, isin);
-      if (existing) {
-        name = name || existing.name;
-        cat  = cat  || existing.cat;
-      }
-    }
-    if (!name) {
-      return respond(null, { error: 'New fund needs a name — please fill in the "New fund" fields.' });
-    }
-    cat = cat || 'Other';
-
-    ws.appendRow([name, isin, cat, date, type, round3(units), round2(nav)]);
-
-    return respond(null, { success: true, isin, name, cat, type, units: round3(units), nav: round2(nav) });
+    const action = body.action || 'add_txn';
+    if (action === 'edit_txn') return handleEditTxn(body);
+    if (action === 'delete_txn') return handleDeleteTxn(body);
+    return handleAddTxn(body);
   } catch (err) {
     return respond(null, { error: err.message });
   }
+}
+
+function handleAddTxn(body) {
+  const sheet = body.sheet;
+  if (!sheet || !ALLOWED_SHEETS.includes(sheet)) {
+    return respond(null, { error: 'Invalid or missing sheet name' });
+  }
+  const isin = (body.isin || '').toString().trim();
+  const date = (body.date || '').toString().trim();
+  const amount = parseFloat(body.amount);
+  if (!isin || !date || !amount) {
+    return respond(null, { error: 'isin, date and amount are required' });
+  }
+
+  const ws = SpreadsheetApp.openById(SHEET_ID).getSheetByName(sheet);
+  if (!ws) return respond(null, { error: `Sheet "${sheet}" not found` });
+
+  const type = amount < 0 ? 'sell' : 'buy';
+  const amountAbs = Math.abs(amount);
+
+  let nav = parseFloat(body.nav);
+  if (!nav || isNaN(nav)) {
+    nav = fetchLiveNav(isin);
+    if (!nav) return respond(null, { error: 'Could not auto-fetch NAV for this fund — please enter it manually.' });
+  }
+
+  let units = parseFloat(body.units);
+  if (!units || isNaN(units)) units = amountAbs / nav;
+  units = Math.abs(units);
+
+  let name = (body.name || '').toString().trim();
+  let cat  = (body.cat  || '').toString().trim();
+  if (!name || !cat) {
+    const existing = lookupExistingFund(ws, isin);
+    if (existing) { name = name || existing.name; cat = cat || existing.cat; }
+  }
+  if (!name) return respond(null, { error: 'New fund needs a name — please fill in the "New fund" fields.' });
+  cat = cat || 'Other';
+
+  ws.appendRow([name, isin, cat, date, type, round3(units), round2(nav), Utilities.getUuid()]);
+
+  return respond(null, { success: true, isin, name, cat, type, units: round3(units), nav: round2(nav) });
+}
+
+function handleEditTxn(body) {
+  const sheet = body.sheet;
+  if (!sheet || !ALLOWED_SHEETS.includes(sheet)) return respond(null, { error: 'Invalid or missing sheet name' });
+  if (!body.id) return respond(null, { error: 'Missing transaction id' });
+
+  const ws = SpreadsheetApp.openById(SHEET_ID).getSheetByName(sheet);
+  if (!ws) return respond(null, { error: `Sheet "${sheet}" not found` });
+
+  const row = findRowById(ws, body.id);
+  if (row === -1) {
+    return respond(null, { error: 'Transaction not found. If this was added before the ID column existed, run backfillTxnIDs() once from the Apps Script editor.' });
+  }
+
+  const date = (body.date || '').toString().trim();
+  const amount = parseFloat(body.amount);
+  if (!date || !amount) return respond(null, { error: 'date and amount are required' });
+
+  const isin = ws.getRange(row, 2).getValue().toString().trim();
+  const type = amount < 0 ? 'sell' : 'buy';
+  const amountAbs = Math.abs(amount);
+
+  let nav = parseFloat(body.nav);
+  if (!nav || isNaN(nav)) {
+    nav = fetchLiveNav(isin);
+    if (!nav) return respond(null, { error: 'Could not auto-fetch NAV for this fund — please enter it manually.' });
+  }
+  let units = parseFloat(body.units);
+  if (!units || isNaN(units)) units = amountAbs / nav;
+  units = Math.abs(units);
+
+  ws.getRange(row, 4).setValue(date);           // date
+  ws.getRange(row, 5).setValue(type);            // type
+  ws.getRange(row, 6).setValue(round3(units));   // units
+  ws.getRange(row, 7).setValue(round2(nav));     // price/nav
+  // columns 1-3 (name/isin/cat) and 8 (id) are left untouched — you can't move a
+  // transaction to a different fund via edit; delete and re-add instead.
+
+  return respond(null, { success: true, type, units: round3(units), nav: round2(nav) });
+}
+
+function handleDeleteTxn(body) {
+  const sheet = body.sheet;
+  if (!sheet || !ALLOWED_SHEETS.includes(sheet)) return respond(null, { error: 'Invalid or missing sheet name' });
+  if (!body.id) return respond(null, { error: 'Missing transaction id' });
+
+  const ws = SpreadsheetApp.openById(SHEET_ID).getSheetByName(sheet);
+  if (!ws) return respond(null, { error: `Sheet "${sheet}" not found` });
+
+  const row = findRowById(ws, body.id);
+  if (row === -1) {
+    return respond(null, { error: 'Transaction not found. If this was added before the ID column existed, run backfillTxnIDs() once from the Apps Script editor.' });
+  }
+  ws.deleteRow(row);
+  return respond(null, { success: true });
+}
+
+function findRowById(ws, id) {
+  const lastRow = ws.getLastRow();
+  if (lastRow < 2) return -1;
+  const ids = ws.getRange(2, ID_COL, lastRow - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) {
+    if (ids[i][0] && ids[i][0].toString().trim() === id.toString().trim()) return i + 2;
+  }
+  return -1;
 }
 
 function fetchLiveNav(isin) {

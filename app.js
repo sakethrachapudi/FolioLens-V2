@@ -155,7 +155,7 @@ function computeYearWiseJS(funds, navSnapshots, today) {
       const yrCF = [];
       if (startVal > 0) yrCF.push({ d: jan1, a: startVal });
       funds.flatMap(f => f.txns.filter(t => t.d.startsWith(yr))).sort((a,b) => a.d.localeCompare(b.d)).forEach(t => {
-        if (t.a !== 0) yrCF.push({ d: t.d, a: Math.abs(t.a) });
+        if (t.a !== 0) yrCF.push({ d: t.d, a: t.a });
       });
       if (yrCF.length && endVal > 0 && (new Date(dec31) - new Date(yrCF[0].d)) / 86400000 >= 30) {
         yrXirr = xirr(yrCF, endVal, dec31);
@@ -296,13 +296,13 @@ function renderYearWise(key, yearWise) {
   el.innerHTML = yearWise.slice().reverse().map(y => `
     <div class="yr-card">
       <div class="yr-card-hd"><span class="yr-label">${y.yr}${y.isPartial?' (YTD)':''}</span>
-        <span class="bg ${y.absGain>=0?'bgp':'bgn'}">${pct(y.gainPct)}</span></div>
+        <span class="bg ${posC(y.xirr)==='up'?'bgp':'bgn'}" title="Annualized XIRR">${y.xirr!=null?pct(y.xirr):'—'}</span></div>
       <div class="yr-row"><span>Start Value</span><span class="yr-val mo">${fmt(y.startVal)}</span></div>
       <div class="yr-row"><span>Fresh Invested</span><span class="yr-val mo">${fmt(y.freshInvested)}</span></div>
       ${y.withdrawals > 0 ? `<div class="yr-row"><span>Withdrawals</span><span class="yr-val mo" style="color:var(--rd)">-${fmt(y.withdrawals)}</span></div>` : ''}
       <div class="yr-row"><span>End Value</span><span class="yr-val mo">${fmt(y.endVal)}</span></div>
       <div class="yr-row"><span>Gain</span><span class="yr-val mo ${posC(y.absGain)}">${y.absGain>=0?'+':'-'}${fmt(Math.abs(y.absGain))}</span></div>
-      <div class="yr-row"><span>Year XIRR</span><span class="yr-val mo ${posC(y.xirr)}">${y.xirr!=null?pct(y.xirr):'—'}</span></div>
+      <div class="yr-row"><span>Simple Return</span><span class="yr-val mo ${posC(y.gainPct)}">${pct(y.gainPct)}</span></div>
     </div>`).join('');
 }
 
@@ -352,10 +352,15 @@ function renderTxnPage(key) {
   const shown = st.txnFiltered.slice(0, st.txnPage * pageSize);
   document.getElementById(`${key}-txnBody`).innerHTML = shown.map(t => {
     const isBuy = t.a >= 0;
+    const hasId = !!t.id;
     return `<tr><td class="mo">${t.d}</td><td>${esc(t.fundName)}</td>
       <td><span class="txn-type ${isBuy?'bgp':'bgn'}">${isBuy?'BUY':'SELL'}</span></td>
       <td class="r mo">${fmt(Math.abs(t.a))}</td><td class="r mo">${Math.abs(t.u).toFixed(3)}</td>
-      <td class="r mo">₹${(t.n||0).toFixed(2)}</td></tr>`;
+      <td class="r mo">₹${(t.n||0).toFixed(2)}</td>
+      <td class="r"><div class="txn-actions">
+        <button class="txn-act-btn" title="${hasId?'Edit':'Run backfillTxnIDs() in Apps Script to enable editing this older entry'}" ${hasId?'':'disabled'} onclick="openEditTxn('${key}','${t.id}')">✏️</button>
+        <button class="txn-act-btn danger" title="${hasId?'Delete':'Run backfillTxnIDs() in Apps Script to enable deleting this older entry'}" ${hasId?'':'disabled'} onclick="deleteTxn('${key}','${t.id}')">🗑</button>
+      </div></td></tr>`;
   }).join('');
   document.getElementById(`${key}-txnMore`).style.display = shown.length < st.txnFiltered.length ? 'block' : 'none';
   document.getElementById(`${key}-txnCount`).textContent = `${shown.length} of ${st.txnFiltered.length} transactions`;
@@ -430,6 +435,7 @@ function closeNavHistory() { document.getElementById('navModalOverlay').classLis
    FAMILY TAB
    ============================================================ */
 function renderFamily() {
+  const today = td();
   const t = famData.totals;
   document.getElementById('fam-inv').textContent = fmt(t.invested);
   document.getElementById('fam-val').textContent = fmt(t.value);
@@ -467,14 +473,10 @@ function renderFamily() {
 
   renderYearWise('fam', famData.yearWise);
 
-  // pooled allocation across all 3 portfolios
-  const natMap = {};
-  Object.values(cache).forEach(p => p.nature.forEach(n => {
-    const nm = natMap[n.cat] = natMap[n.cat] || { cat: n.cat, value: 0, invested: 0, fundCount: 0, cf: [] };
-    nm.value += n.value; nm.invested += n.invested; nm.fundCount += n.fundCount;
-  }));
-  const famNature = Object.values(natMap).sort((a,b) => b.value - a.value)
-    .map(n => ({ ...n, xirr: null }));
+  // pooled allocation across all 3 portfolios — reuse computeNatureJS on the combined
+  // funds list (with real txns) so category XIRR is actually computed, not stubbed.
+  const allFunds = Object.values(cache).flatMap(p => p.funds);
+  const famNature = computeNatureJS(allFunds, today);
   renderNature('fam', famNature, t.value);
   renderAllocChart('fam', famNature);
 }
@@ -614,15 +616,20 @@ function exportTxnCSV(key) {
 }
 
 /* ============================================================
-   ADD TRANSACTION MODAL
+   ADD / EDIT / DELETE TRANSACTION
    ============================================================ */
+let modalMode = 'add';   // 'add' | 'edit'
+let modalEditId = null;
+
 function openAddTxn(key) {
-  modalKey = key;
+  modalKey = key; modalMode = 'add'; modalEditId = null;
   document.getElementById('txnModalTitle').textContent = `Add Transaction — ${PORTFOLIOS[key].label}`;
   const sel = document.getElementById('txnFundSelect');
+  sel.disabled = false;
   sel.innerHTML = '<option value="__new__">+ New fund…</option>' +
     cache[key].funds.map(f => `<option value="${f.isin}">${esc(f.name)}</option>`).join('');
   document.getElementById('txnNewFundBlock').style.display = 'none';
+  document.getElementById('txnType').value = 'buy';
   document.getElementById('txnDate').value = td();
   document.getElementById('txnAmount').value = '';
   document.getElementById('txnNav').value = '';
@@ -630,6 +637,25 @@ function openAddTxn(key) {
   document.getElementById('txnSubmitBtn').textContent = 'Save Transaction';
   document.getElementById('txnModalOverlay').classList.add('show');
 }
+
+function openEditTxn(key, id) {
+  const txn = (uiState[key].allTxns || []).find(t => t.id === id);
+  if (!txn) { toast('Could not find that transaction'); return; }
+  modalKey = key; modalMode = 'edit'; modalEditId = id;
+  document.getElementById('txnModalTitle').textContent = `Edit Transaction — ${txn.fundName}`;
+  const sel = document.getElementById('txnFundSelect');
+  sel.innerHTML = `<option value="${txn.isin}">${esc(txn.fundName)}</option>`;
+  sel.disabled = true; // can't move a transaction to a different fund via edit
+  document.getElementById('txnNewFundBlock').style.display = 'none';
+  document.getElementById('txnType').value = txn.a >= 0 ? 'buy' : 'sell';
+  document.getElementById('txnDate').value = txn.d;
+  document.getElementById('txnAmount').value = Math.abs(txn.a);
+  document.getElementById('txnNav').value = txn.n || '';
+  document.getElementById('txnError').style.display = 'none';
+  document.getElementById('txnSubmitBtn').textContent = 'Save Changes';
+  document.getElementById('txnModalOverlay').classList.add('show');
+}
+
 function closeTxnModal() { document.getElementById('txnModalOverlay').classList.remove('show'); }
 document.addEventListener('change', e => {
   if (e.target && e.target.id === 'txnFundSelect') {
@@ -641,7 +667,7 @@ async function submitTxn() {
   const key = modalKey;
   const sheet = PORTFOLIOS[key].sheet;
   const isinSel = document.getElementById('txnFundSelect').value;
-  const isNew = isinSel === '__new__';
+  const isNew = modalMode === 'add' && isinSel === '__new__';
   const type = document.getElementById('txnType').value;
   const date = document.getElementById('txnDate').value;
   const amount = parseFloat(document.getElementById('txnAmount').value);
@@ -651,9 +677,15 @@ async function submitTxn() {
 
   if (!date || !amount || amount <= 0) { errBox.textContent = 'Date and a positive amount are required.'; errBox.style.display = 'block'; return; }
 
-  const payload = { action: 'add_txn', sheet, date, amount: type === 'sell' ? -Math.abs(amount) : Math.abs(amount) };
+  const payload = {
+    action: modalMode === 'edit' ? 'edit_txn' : 'add_txn',
+    sheet, date, amount: type === 'sell' ? -Math.abs(amount) : Math.abs(amount),
+  };
   if (navInput) { payload.nav = navInput; payload.units = payload.amount / navInput; }
-  if (isNew) {
+  if (modalMode === 'edit') {
+    payload.id = modalEditId;
+    payload.isin = isinSel;
+  } else if (isNew) {
     payload.isNewFund = true;
     payload.isin = document.getElementById('txnNewIsin').value.trim();
     payload.name = document.getElementById('txnNewName').value.trim();
@@ -664,18 +696,37 @@ async function submitTxn() {
   }
 
   const btn = document.getElementById('txnSubmitBtn');
-  btn.disabled = true; btn.textContent = 'Saving…';
+  btn.disabled = true; btn.textContent = modalMode === 'edit' ? 'Saving…' : 'Saving…';
   try {
     const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) });
     const j = await res.json().catch(() => ({}));
     if (j && j.error) throw new Error(j.error);
     btn.textContent = 'Saved ✓';
-    toast('Transaction saved — syncing dashboard…');
+    toast(modalMode === 'edit' ? 'Transaction updated — syncing dashboard…' : 'Transaction saved — syncing dashboard…');
     setTimeout(() => { closeTxnModal(); btn.disabled = false; btn.textContent = 'Save Transaction'; refreshLive(key, true); }, 700);
   } catch (e) {
-    btn.disabled = false; btn.textContent = 'Save Transaction';
-    errBox.textContent = 'Could not save — your Apps Script may not have the doPost handler set up yet. See the setup note below.';
+    btn.disabled = false; btn.textContent = modalMode === 'edit' ? 'Save Changes' : 'Save Transaction';
+    errBox.textContent = 'Could not save — your Apps Script may not have this handler set up yet. See the setup note below.';
     errBox.style.display = 'block';
+  }
+}
+
+async function deleteTxn(key, id) {
+  const txn = (uiState[key].allTxns || []).find(t => t.id === id);
+  if (!txn) { toast('Could not find that transaction'); return; }
+  const isBuy = txn.a >= 0;
+  const confirmMsg = `Delete this transaction?\n\n${isBuy ? 'BUY' : 'SELL'} · ${txn.fundName}\n${txn.d} · ${fmt(Math.abs(txn.a))}\n\nThis removes the row from your Google Sheet and cannot be undone from the dashboard.`;
+  if (!confirm(confirmMsg)) return;
+
+  try {
+    const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'delete_txn', sheet: PORTFOLIOS[key].sheet, id }) });
+    const j = await res.json().catch(() => ({}));
+    if (j && j.error) throw new Error(j.error);
+    toast('Transaction deleted — syncing dashboard…');
+    refreshLive(key, true);
+  } catch (e) {
+    toast('Could not delete: ' + e.message);
   }
 }
 
@@ -738,11 +789,16 @@ async function init() {
   const startKey = (location.hash || '#fam').replace('#', '');
   switchTab(TAB_ORDER.includes(startKey) ? startKey : 'fam');
 
-  // swipe between tabs (mobile)
-  let touchX = null;
-  document.querySelector('.page').addEventListener('touchstart', e => { touchX = e.touches[0].clientX; }, { passive: true });
+  // swipe between tabs (mobile) — but not when the touch starts inside a horizontally
+  // scrollable table (holdings/transactions/comparison), so scrolling those doesn't
+  // accidentally change tabs.
+  let touchX = null, touchStartedInScroll = false;
+  document.querySelector('.page').addEventListener('touchstart', e => {
+    touchX = e.touches[0].clientX;
+    touchStartedInScroll = !!e.target.closest('.tw');
+  }, { passive: true });
   document.querySelector('.page').addEventListener('touchend', e => {
-    if (touchX == null) return;
+    if (touchX == null || touchStartedInScroll) { touchX = null; touchStartedInScroll = false; return; }
     const dx = e.changedTouches[0].clientX - touchX;
     if (Math.abs(dx) > 70) {
       const cur = TAB_ORDER.indexOf((location.hash||'#fam').replace('#',''));

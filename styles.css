@@ -138,6 +138,12 @@ tr:hover td{background:var(--card2);}
   border:1px solid rgba(245,197,66,.3);border-radius:14px;padding:14px;}
 
 .txn-type{font-size:10px;padding:2px 7px;border-radius:6px;font-weight:700;}
+.txn-actions{display:flex;gap:6px;justify-content:flex-end;}
+.txn-act-btn{width:26px;height:26px;border-radius:7px;border:1px solid var(--bd);background:var(--bg2);
+  color:var(--tx2);font-size:12px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;}
+.txn-act-btn:hover{border-color:var(--tx3);color:var(--tx);}
+.txn-act-btn.danger:hover{border-color:var(--rd);color:var(--rd);}
+.txn-act-btn:disabled{opacity:.35;cursor:default;}
 
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:flex-end;
   justify-content:center;z-index:100;}
