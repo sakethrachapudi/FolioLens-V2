@@ -172,7 +172,7 @@ def compute_year_wise(funds, nav_snapshots, today):
             yr_txns = sorted([t for f in funds for t in f["txns"] if t["d"].startswith(yr)], key=lambda t: t["d"])
             for t in yr_txns:
                 if t["a"] != 0:
-                    cf.append((to_date(t["d"]), -abs(t["a"])))
+                    cf.append((to_date(t["d"]), -t["a"]))
             if cf and end_val > 0 and (dec31 - cf[0][0]).days >= 30:
                 cf.append((dec31, end_val))
                 yr_xirr = xirr(cf)
