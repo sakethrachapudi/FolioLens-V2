@@ -258,6 +258,8 @@ def compute_portfolio(sheet_name, nav_snapshots, today):
     all_txns_cf.append((today, total_val))
     port_xirr = xirr(all_txns_cf)
 
+    total_withdrawn = sum(abs(t["a"]) for f in fund_out for t in f["txns"] if t["a"] < 0)
+
     nature_out = []
     for cat, d in nature_map.items():
         cat_cf = [(to_date(t["d"]), -t["a"]) for t in d["txns"]] + [(today, d["value"])]
@@ -273,9 +275,14 @@ def compute_portfolio(sheet_name, nav_snapshots, today):
     gainers = [{"isin": g["isin"], "name": g["name"], "xirr": g["xirr"]} for g in ranked[:3]]
     losers = [{"isin": l["isin"], "name": l["name"], "xirr": l["xirr"]} for l in list(reversed(ranked))[:3]]
 
+    # True gain = (current value + money already withdrawn) - money invested.
+    # Just doing value - invested is wrong for any portfolio with withdrawals (e.g. SWP),
+    # since it ignores cash you've already taken out and pockets it as an apparent "loss".
+    true_gain = (total_val + total_withdrawn) - total_inv
+
     return {
         "totals": {"invested": total_inv, "value": total_val, "xirr": port_xirr,
-                   "gain": total_val - total_inv, "fundCount": len(fund_out)},
+                   "withdrawn": total_withdrawn, "gain": true_gain, "fundCount": len(fund_out)},
         "funds": fund_out, "yearWise": year_wise, "nature": nature_out,
         "gainers": gainers, "losers": losers,
     }, fam_cf
@@ -285,21 +292,21 @@ def compute_swp(fund_out, total_value, port_xirr, today):
     all_txns = [t for f in fund_out for t in f["txns"]]
     withdrawals = [t for t in all_txns if t["a"] < 0]
     total_withdrawn = sum(abs(t["a"]) for t in withdrawals)
-    cutoff = today - timedelta(days=365)
-    recent = [t for t in withdrawals if to_date(t["d"]) >= cutoff]
-    pool = recent if recent else withdrawals
-    if pool:
-        span_days = max(1, (today - to_date(min(t["d"] for t in pool))).days)
-        avg_monthly = sum(abs(t["a"]) for t in pool) / max(1, span_days / 30.44)
-    else:
-        avg_monthly = 0
+
+    current_year = str(today.year)
+    yr_withdrawals = [t for t in withdrawals if t["d"][:4] == current_year]
+    yr_withdrawn_amt = sum(abs(t["a"]) for t in yr_withdrawals)
+    months_elapsed = today.month  # Jan=1 month elapsed ... Dec=12 (full year)
+    avg_monthly = (yr_withdrawn_amt / months_elapsed) if months_elapsed > 0 else 0
+
     runway_months = (total_value / avg_monthly) if avg_monthly > 0 else None
     annual_rate_pct = (avg_monthly * 12 / total_value * 100) if total_value > 0 else 0
-    sustainable = (port_xirr is not None) and (annual_rate_pct < port_xirr)
+    sustainable = (port_xirr is not None) and (annual_rate_pct < port_xirr) if avg_monthly > 0 else None
     return {
         "totalWithdrawn": total_withdrawn, "withdrawalCount": len(withdrawals),
         "avgMonthly": avg_monthly, "runwayMonths": runway_months,
         "annualWithdrawalRatePct": annual_rate_pct, "sustainable": sustainable,
+        "yearWithdrawn": yr_withdrawn_amt, "monthsElapsed": months_elapsed, "currentYear": current_year,
     }
 
 
@@ -333,6 +340,7 @@ def main():
 
     fam_inv = sum(p["totals"]["invested"] for p in portfolios_out.values())
     fam_val = sum(p["totals"]["value"] for p in portfolios_out.values())
+    fam_withdrawn = sum(p["totals"].get("withdrawn", 0) for p in portfolios_out.values())
     fam_cf_all.append((today, fam_val))
     fam_xirr = xirr(fam_cf_all)
 
@@ -347,7 +355,8 @@ def main():
         "generatedAt": datetime.utcnow().isoformat() + "Z",
         "portfolios": portfolios_out,
         "family": {
-            "totals": {"invested": fam_inv, "value": fam_val, "xirr": fam_xirr, "gain": fam_val - fam_inv},
+            "totals": {"invested": fam_inv, "value": fam_val, "withdrawn": fam_withdrawn,
+                       "gain": (fam_val + fam_withdrawn) - fam_inv, "xirr": fam_xirr},
             "yearWise": fam_year_wise, "compare": compare,
         },
     }
