@@ -65,11 +65,52 @@ def fetch_nav_snapshots():
         return {}
 
 
+_AMFI_ISIN_MAP = None  # lazy-loaded once per run, isin -> mfapi scheme code
+
+
+def get_amfi_isin_map():
+    """Fetches AMFI's public scheme index once per run and builds an ISIN -> scheme
+    code lookup, for funds not already in the static ISIN_SCHEME map. This is only
+    ever used to find the *code* -- the actual NAV always comes from mfapi.in."""
+    global _AMFI_ISIN_MAP
+    if _AMFI_ISIN_MAP is not None:
+        return _AMFI_ISIN_MAP
+    _AMFI_ISIN_MAP = {}
+    try:
+        r = SESSION.get("https://www.amfiindia.com/spages/NAVAll.txt", timeout=30)
+        if r.ok:
+            for line in r.text.splitlines():
+                if ";" not in line:
+                    continue
+                cols = line.split(";")
+                if len(cols) < 4:
+                    continue
+                code = cols[0].strip()
+                if not code.isdigit():
+                    continue
+                isin_growth = cols[1].strip()
+                isin_reinvest = cols[2].strip()
+                if isin_growth:
+                    _AMFI_ISIN_MAP[isin_growth] = code
+                if isin_reinvest:
+                    _AMFI_ISIN_MAP[isin_reinvest] = code
+            log(f"  AMFI index loaded: {len(_AMFI_ISIN_MAP)} ISINs")
+    except Exception as e:
+        log(f"  ! AMFI index fetch failed: {e}")
+    return _AMFI_ISIN_MAP
+
+
+def resolve_scheme_code(isin):
+    if isin in ISIN_SCHEME:
+        return ISIN_SCHEME[isin]
+    return get_amfi_isin_map().get(isin)
+
+
 def fetch_nav_history(isin):
     """Returns (history, scheme_name) where history = [(iso_date, nav), ...] ascending, or None."""
     if isin in NAV_CACHE:
         return NAV_CACHE[isin]
-    scheme = ISIN_SCHEME.get(isin)
+    scheme = resolve_scheme_code(isin)
     result = None
     if scheme:
         try:
