@@ -676,7 +676,7 @@ function openAddTxn(key) {
   sel.disabled = false;
   sel.innerHTML = '<option value="__new__">+ New fund…</option>' +
     cache[key].funds.map(f => `<option value="${f.isin}">${esc(f.name)}</option>`).join('');
-  document.getElementById('txnNewFundBlock').style.display = 'none';
+  document.getElementById('txnNewFundBlock').style.display = sel.value === '__new__' ? 'block' : 'none';
   document.getElementById('txnType').value = 'buy';
   document.getElementById('txnDate').value = td();
   document.getElementById('txnAmount').value = '';
