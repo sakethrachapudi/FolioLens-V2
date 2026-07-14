@@ -266,7 +266,8 @@ def compute_portfolio(sheet_name, nav_snapshots, today):
         units = f.get("units", 0)
         invested = f.get("invested", 0)
         value = units * nav
-        gain = value - invested
+        fund_withdrawn = sum(abs(t["a"]) for t in txns if t["a"] < 0)
+        gain = (value + fund_withdrawn) - invested
         gain_pct = (gain / invested * 100) if invested else 0
 
         final_date = today if is_live else (to_date(txns[-1]["d"]) if txns else today)
@@ -277,9 +278,10 @@ def compute_portfolio(sheet_name, nav_snapshots, today):
         avg_nav = (invested / total_buy_units) if total_buy_units else 0
 
         cat = f.get("cat", "Other")
-        nm = nature_map.setdefault(cat, {"value": 0.0, "invested": 0.0, "funds": [], "txns": []})
+        nm = nature_map.setdefault(cat, {"value": 0.0, "invested": 0.0, "withdrawn": 0.0, "funds": [], "txns": []})
         nm["value"] += value
         nm["invested"] += sum(t["a"] for t in txns)
+        nm["withdrawn"] += fund_withdrawn
         nm["funds"].append(isin)
         nm["txns"].extend(txns)
 
@@ -291,7 +293,7 @@ def compute_portfolio(sheet_name, nav_snapshots, today):
             "isin": isin, "name": f.get("name") or scheme_name, "cat": cat,
             "units": units, "invested": invested, "statementNav": f.get("statementNav", 0),
             "avgNav": avg_nav, "liveNav": nav, "navDate": live_date or "stmt", "isLive": is_live,
-            "value": value, "gain": gain, "gainPct": gain_pct, "xirr": fx,
+            "value": value, "withdrawn": fund_withdrawn, "gain": gain, "gainPct": gain_pct, "xirr": fx,
             "navHistory": hist_trimmed, "txns": txns,
         })
 
@@ -305,7 +307,7 @@ def compute_portfolio(sheet_name, nav_snapshots, today):
     for cat, d in nature_map.items():
         cat_cf = [(to_date(t["d"]), -t["a"]) for t in d["txns"]] + [(today, d["value"])]
         nature_out.append({
-            "cat": cat, "value": d["value"], "invested": d["invested"],
+            "cat": cat, "value": d["value"], "invested": d["invested"], "withdrawn": d["withdrawn"],
             "xirr": xirr(cat_cf), "fundCount": len(d["funds"]),
         })
     nature_out.sort(key=lambda x: -x["value"])
@@ -390,6 +392,7 @@ def main():
 
     compare = [{"sheet": sheet, "label": p["label"], "accent": p["accent"],
                 "invested": p["totals"]["invested"], "value": p["totals"]["value"],
+                "withdrawn": p["totals"].get("withdrawn", 0),
                 "xirr": p["totals"]["xirr"]} for sheet, p in portfolios_out.items()]
 
     output = {
