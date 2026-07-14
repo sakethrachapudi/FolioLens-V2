@@ -105,9 +105,9 @@
 <div class="modal-overlay" id="txnModalOverlay">
   <div class="modal">
     <h3 id="txnModalTitle">Add Transaction</h3>
-    <div class="field">
+    <div class="field" id="txnFundField">
       <label>Fund</label>
-      <select id="txnFundSelect"></select>
+      <div id="txnFundDisplay" style="padding:10px 12px;background:var(--bg);border:1px solid var(--bd);border-radius:9px;font-size:14px;color:var(--tx)"></div>
     </div>
     <div id="txnNewFundBlock" style="display:none">
       <div class="field"><label>ISIN</label><input type="text" id="txnNewIsin" placeholder="e.g. INF090I01171"></div>

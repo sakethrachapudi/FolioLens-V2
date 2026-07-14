@@ -282,6 +282,7 @@ function renderClosedPositions(key, closedRows) {
     <td class="r mo">${fmt(f.withdrawn||0)}</td>
     <td class="r"><span class="mo ${posC(f.gain)}">${f.gain>=0?'+':'-'}${fmt(Math.abs(f.gain))}</span> <span class="bg ${f.gain>=0?'bgp':'bgn'}">${pct(f.gainPct)}</span></td>
     <td class="r mo ${posC(f.xirr)}">${f.xirr!=null?pct(f.xirr):'—'}</td>
+    <td class="r"><button class="txn-act-btn" title="Reinvest" onclick="openAddTxn('${key}','${f.isin}','buy')">＋</button></td>
   </tr>`).join('');
 }
 
@@ -320,6 +321,10 @@ function renderHoldingsTable(key) {
       <td class="r mo">${fmt(f.value)}</td>
       <td class="r"><span class="mo ${posC(f.gain)}">${f.gain>=0?'+':'-'}${fmt(Math.abs(f.gain))}</span><br><span class="bg ${f.gain>=0?'bgp':'bgn'}">${pct(f.gainPct)}</span></td>
       <td class="r"><div class="xbar-wrap"><div class="xbar"><div class="xbar-fill" style="width:${bw}%;background:${posCol(f.xirr)}"></div></div><span class="mo ${posC(f.xirr)}" style="min-width:52px;display:inline-block;text-align:right">${f.xirr!=null?pct(f.xirr):'—'}</span></div></td>
+      <td class="r"><div class="txn-actions">
+        <button class="txn-act-btn" title="Buy more" onclick="openAddTxn('${key}','${f.isin}','buy')">＋</button>
+        <button class="txn-act-btn danger" title="Sell" onclick="openAddTxn('${key}','${f.isin}','sell')">－</button>
+      </div></td>
     </tr>`;
   }).join('');
   document.getElementById(`${key}-holdCount`).textContent = `${filtered.length} of ${rows.length} funds`;
@@ -674,8 +679,10 @@ function exportTxnCSV(key) {
 /* ============================================================
    ADD / EDIT / DELETE TRANSACTION
    ============================================================ */
-let modalMode = 'add';   // 'add' | 'edit'
+let modalMode = 'add';      // 'add' | 'edit'
 let modalEditId = null;
+let modalIsin = null;        // fund isin this modal is operating on (null only for New Fund flow)
+let modalIsNewFund = false;  // true only for the top-level "+ New Fund" flow
 
 /* ============================================================
    PIN GATE (soft guard against accidental taps, not real security --
@@ -693,16 +700,26 @@ function checkPinUnlock() {
   return false;
 }
 
-function openAddTxn(key) {
+/* isin omitted -> top-level "+ New Fund" flow. isin provided -> Buy/Sell button on a
+   specific holdings or closed-position row, with presetType defaulting the Type field. */
+function openAddTxn(key, isin, presetType) {
   if (!checkPinUnlock()) return;
   modalKey = key; modalMode = 'add'; modalEditId = null;
-  document.getElementById('txnModalTitle').textContent = `Add Transaction — ${PORTFOLIOS[key].label}`;
-  const sel = document.getElementById('txnFundSelect');
-  sel.disabled = false;
-  sel.innerHTML = '<option value="__new__">+ New fund…</option>' +
-    cache[key].funds.map(f => `<option value="${f.isin}">${esc(f.name)}</option>`).join('');
-  document.getElementById('txnNewFundBlock').style.display = sel.value === '__new__' ? 'block' : 'none';
-  document.getElementById('txnType').value = 'buy';
+  modalIsin = isin || null;
+  modalIsNewFund = !isin;
+
+  if (modalIsNewFund) {
+    document.getElementById('txnModalTitle').textContent = `Add New Fund — ${PORTFOLIOS[key].label}`;
+    document.getElementById('txnFundField').style.display = 'none';
+    document.getElementById('txnNewFundBlock').style.display = 'block';
+  } else {
+    const fund = cache[key].funds.find(f => f.isin === isin);
+    document.getElementById('txnModalTitle').textContent = `${presetType === 'sell' ? 'Sell' : 'Buy'} — ${fund ? fund.name : isin}`;
+    document.getElementById('txnFundDisplay').textContent = fund ? `${fund.name} · ${fund.cat}` : isin;
+    document.getElementById('txnFundField').style.display = '';
+    document.getElementById('txnNewFundBlock').style.display = 'none';
+  }
+  document.getElementById('txnType').value = presetType || 'buy';
   document.getElementById('txnDate').value = td();
   document.getElementById('txnAmount').value = '';
   document.getElementById('txnNav').value = '';
@@ -719,10 +736,10 @@ function openEditTxn(key, id) {
   const txn = (uiState[key].allTxns || []).find(t => t.id === id);
   if (!txn) { toast('Could not find that transaction'); return; }
   modalKey = key; modalMode = 'edit'; modalEditId = id;
+  modalIsin = txn.isin; modalIsNewFund = false;
   document.getElementById('txnModalTitle').textContent = `Edit Transaction — ${txn.fundName}`;
-  const sel = document.getElementById('txnFundSelect');
-  sel.innerHTML = `<option value="${txn.isin}">${esc(txn.fundName)}</option>`;
-  sel.disabled = true; // can't move a transaction to a different fund via edit
+  document.getElementById('txnFundField').style.display = '';
+  document.getElementById('txnFundDisplay').textContent = `${txn.fundName}${txn.cat ? ' · ' + txn.cat : ''}`;
   document.getElementById('txnNewFundBlock').style.display = 'none';
   document.getElementById('txnType').value = txn.a >= 0 ? 'buy' : 'sell';
   document.getElementById('txnDate').value = txn.d;
@@ -738,18 +755,13 @@ function openEditTxn(key, id) {
 function closeTxnModal() { document.getElementById('txnModalOverlay').classList.remove('show'); }
 document.addEventListener('change', e => {
   if (!e.target) return;
-  if (e.target.id === 'txnFundSelect') {
-    document.getElementById('txnNewFundBlock').style.display = e.target.value === '__new__' ? 'block' : 'none';
-    updateSellAllVisibility();
-  }
   if (e.target.id === 'txnType') updateSellAllVisibility();
   if (e.target.id === 'txnSellAll') applySellAllState(e.target.checked);
 });
 
 function updateSellAllVisibility() {
   const type = document.getElementById('txnType').value;
-  const isinSel = document.getElementById('txnFundSelect').value;
-  const show = modalMode === 'add' && type === 'sell' && isinSel !== '__new__';
+  const show = modalMode === 'add' && type === 'sell' && !modalIsNewFund && modalIsin;
   document.getElementById('txnSellAllBlock').style.display = show ? 'block' : 'none';
   if (!show) {
     document.getElementById('txnSellAll').checked = false;
@@ -762,8 +774,7 @@ function applySellAllState(checked) {
   const amountLabel = document.getElementById('txnAmountLabel');
   const navLabel = document.getElementById('txnNavLabel');
   if (checked) {
-    const isin = document.getElementById('txnFundSelect').value;
-    const fund = cache[modalKey]?.funds.find(f => f.isin === isin);
+    const fund = cache[modalKey]?.funds.find(f => f.isin === modalIsin);
     amountInput.value = '';
     amountInput.disabled = true;
     amountInput.placeholder = 'auto (all units × NAV)';
@@ -782,18 +793,17 @@ function applySellAllState(checked) {
 async function submitTxn() {
   const key = modalKey;
   const sheet = PORTFOLIOS[key].sheet;
-  const isinSel = document.getElementById('txnFundSelect').value;
-  const isNew = modalMode === 'add' && isinSel === '__new__';
+  const isNew = modalMode === 'add' && modalIsNewFund;
   const type = document.getElementById('txnType').value;
   const date = document.getElementById('txnDate').value;
-  const sellAll = modalMode === 'add' && document.getElementById('txnSellAll').checked;
+  const sellAll = modalMode === 'add' && !modalIsNewFund && document.getElementById('txnSellAll').checked;
   const navInput = parseFloat(document.getElementById('txnNav').value);
   const errBox = document.getElementById('txnError');
   errBox.style.display = 'none';
 
   let amount, explicitUnits = null;
   if (sellAll) {
-    const fund = cache[key]?.funds.find(f => f.isin === isinSel);
+    const fund = cache[key]?.funds.find(f => f.isin === modalIsin);
     if (!fund || Math.abs(fund.units) < 0.001) { errBox.textContent = 'No units currently held in this fund to sell.'; errBox.style.display = 'block'; return; }
     if (!navInput || navInput <= 0) { errBox.textContent = 'NAV is required to sell all units (used to compute the amount).'; errBox.style.display = 'block'; return; }
     explicitUnits = fund.units;
@@ -802,6 +812,14 @@ async function submitTxn() {
     amount = parseFloat(document.getElementById('txnAmount').value);
   }
   if (!date || !amount || amount <= 0) { errBox.textContent = 'Date and a positive amount are required.'; errBox.style.display = 'block'; return; }
+  if (type === 'sell' && !sellAll && modalMode === 'add' && !isNew) {
+    const fund = cache[key]?.funds.find(f => f.isin === modalIsin);
+    if (fund && Math.abs(fund.units) < 0.001) {
+      errBox.textContent = 'This fund has no units currently held — nothing to sell. Use "Sell all units" only if you\'re certain.';
+      errBox.style.display = 'block';
+      return;
+    }
+  }
 
   const payload = {
     action: modalMode === 'edit' ? 'edit_txn' : 'add_txn',
@@ -811,7 +829,7 @@ async function submitTxn() {
   else if (navInput) { payload.nav = navInput; payload.units = payload.amount / navInput; }
   if (modalMode === 'edit') {
     payload.id = modalEditId;
-    payload.isin = isinSel;
+    payload.isin = modalIsin;
   } else if (isNew) {
     payload.isNewFund = true;
     payload.isin = document.getElementById('txnNewIsin').value.trim();
@@ -819,7 +837,7 @@ async function submitTxn() {
     payload.cat = document.getElementById('txnNewCat').value.trim();
     if (!payload.isin || !payload.name) { errBox.textContent = 'New fund needs at least ISIN and name.'; errBox.style.display = 'block'; return; }
   } else {
-    payload.isin = isinSel;
+    payload.isin = modalIsin;
   }
 
   const btn = document.getElementById('txnSubmitBtn');
