@@ -186,14 +186,15 @@ function computeNatureJS(funds, today) {
   const natMap = {};
   funds.forEach(f => {
     const cat = f.cat || 'Other';
-    const nm = natMap[cat] = natMap[cat] || { cat, value: 0, invested: 0, fundCount: 0, txns: [] };
+    const nm = natMap[cat] = natMap[cat] || { cat, value: 0, invested: 0, withdrawn: 0, fundCount: 0, txns: [] };
     nm.value += f.value;
     nm.invested += f.txns.reduce((s,t) => s+t.a, 0);
+    nm.withdrawn += f.txns.filter(t=>t.a<0).reduce((s,t) => s+Math.abs(t.a), 0);
     nm.fundCount++;
     nm.txns.push(...f.txns);
   });
   return Object.values(natMap).map(n => ({
-    cat: n.cat, value: n.value, invested: n.invested, fundCount: n.fundCount,
+    cat: n.cat, value: n.value, invested: n.invested, withdrawn: n.withdrawn, fundCount: n.fundCount,
     xirr: xirr(n.txns, n.value, today),
   })).sort((a,b) => b.value - a.value);
 }
@@ -249,17 +250,39 @@ function renderPortfolio(key) {
   document.getElementById(`${key}-mult`).textContent = t.invested ? `${((t.value+withdrawn)/t.invested).toFixed(2)}x invested (incl. withdrawn)` : '—';
 
   const rows = p.funds.map((f, i) => ({ ...f, color: PAL[i % PAL.length] }));
-  uiState[key].allRows = rows;
-  document.getElementById(`${key}-navDate`).textContent = `${rows.filter(r=>r.isLive).length}/${rows.length} live NAVs`;
+  const EPS = 0.001;
+  const activeRows = rows.filter(r => Math.abs(r.units) > EPS);
+  const closedRows = rows.filter(r => Math.abs(r.units) <= EPS && r.invested > 0);
+  uiState[key].allRows = activeRows;
+  document.getElementById(`${key}-navDate`).textContent = `${activeRows.filter(r=>r.isLive).length}/${activeRows.length} live NAVs`;
 
   renderHoldingsTable(key);
-  renderGainersLosers(key, rows);
+  renderGainersLosers(key, activeRows);
+  renderClosedPositions(key, closedRows);
   renderGrowthChart(key, p.yearWise, cfg.accent);
   renderAllocChart(key, p.nature);
   renderYearWise(key, p.yearWise);
   renderNature(key, p.nature, t.value);
   renderTxnLog(key, p.funds);
   if (cfg.swp && p.swp) renderSWP(key, p.swp);
+}
+
+function renderClosedPositions(key, closedRows) {
+  const header = document.getElementById(`${key}-closedHeader`);
+  if (!closedRows.length) { header.style.display = 'none'; return; }
+  header.style.display = '';
+  document.getElementById(`${key}-closedCount`).textContent = `${closedRows.length} fund${closedRows.length>1?'s':''}`;
+  const tb = document.getElementById(`${key}-closedBody`);
+  tb.innerHTML = closedRows.map(f => `<tr>
+    <td><div class="fund-name-cell" onclick="openNavHistory('${key}','${f.isin}')">
+      <span class="fund-dot" style="background:${f.color}"></span>
+      <span><span class="fund-name-txt">${esc(f.name)}</span><br><span class="fund-cat">${esc(f.cat)}</span></span>
+    </div></td>
+    <td class="r mo">${fmt(f.invested)}</td>
+    <td class="r mo">${fmt(f.withdrawn||0)}</td>
+    <td class="r"><span class="mo ${posC(f.gain)}">${f.gain>=0?'+':'-'}${fmt(Math.abs(f.gain))}</span> <span class="bg ${f.gain>=0?'bgp':'bgn'}">${pct(f.gainPct)}</span></td>
+    <td class="r mo ${posC(f.xirr)}">${f.xirr!=null?pct(f.xirr):'—'}</td>
+  </tr>`).join('');
 }
 
 function renderHoldingsTable(key) {
@@ -328,7 +351,7 @@ function renderNature(key, nature, totalVal) {
   const el = document.getElementById(`${key}-natureGrid`);
   el.innerHTML = nature.map(n => {
     const share = totalVal ? n.value / totalVal * 100 : 0;
-    const gain = n.value - n.invested;
+    const gain = (n.value + (n.withdrawn||0)) - n.invested;
     return `<div class="nat-card">
       <div class="nat-hd"><span style="color:${catColor(n.cat)}">${esc(n.cat)}</span><span class="mo">${fmt(n.value)}</span></div>
       <div class="nat-bar"><div class="nat-bar-fill" style="width:${share}%;background:${catColor(n.cat)}"></div></div>
@@ -476,7 +499,7 @@ function renderFamily() {
 
   const cb = document.getElementById('fam-compareBody');
   cb.innerHTML = famData.compare.map(r => {
-    const gain = r.value - r.invested, gp = r.invested ? gain/r.invested*100 : 0;
+    const gain = (r.value + (r.withdrawn||0)) - r.invested, gp = r.invested ? gain/r.invested*100 : 0;
     return `<tr><td><span class="compare-accent" style="color:${r.accent}"><span class="compare-dot" style="background:${r.accent}"></span>${esc(r.label)}</span></td>
       <td class="r mo">${fmt(r.invested)}</td><td class="r mo">${fmt(r.value)}</td>
       <td class="r"><span class="mo ${posC(gain)}">${gain>=0?'+':'-'}${fmt(Math.abs(gain))}</span> <span class="bg ${gain>=0?'bgp':'bgn'}">${pct(gp)}</span></td>
@@ -548,14 +571,15 @@ async function refreshLive(key, silent) {
     const isLive = !!live;
     if (isLive) updated++;
     const value = f.units * liveNav;
-    const gain = value - f.invested;
+    const fundWithdrawn = f.txns.filter(t=>t.a<0).reduce((s,t) => s+Math.abs(t.a), 0);
+    const gain = (value + fundWithdrawn) - f.invested;
     const gainPct = f.invested ? gain / f.invested * 100 : 0;
     const finalDate = isLive ? today : (f.txns.length ? f.txns[f.txns.length-1].d : today);
     const totalBuyUnits = f.txns.filter(t => t.a > 0).reduce((s,t) => s+t.u, 0);
     newFunds.push({
       isin: f.isin, name: f.name, cat: f.cat, units: f.units, invested: f.invested,
       statementNav: f.statementNav, avgNav: totalBuyUnits ? f.invested/totalBuyUnits : 0,
-      liveNav, navDate: isLive ? today : 'stmt', isLive, value, gain, gainPct,
+      liveNav, navDate: isLive ? today : 'stmt', isLive, value, withdrawn: fundWithdrawn, gain, gainPct,
       xirr: xirr(f.txns, value, finalDate), navHistory: oldNavHistory[f.isin] || [], txns: f.txns,
     });
   }
@@ -619,7 +643,8 @@ function syncFamilyFromCache(navSnapshots, today) {
   const allTxnsCF = keys.flatMap(k => (cache[k]?.funds || []).flatMap(f => f.txns));
   famData.totals.xirr = xirr(allTxnsCF, famData.totals.value, today);
   famData.compare = keys.map(k => ({ sheet: PORTFOLIOS[k].sheet, label: PORTFOLIOS[k].label, accent: PORTFOLIOS[k].accent,
-    invested: cache[k]?.totals.invested || 0, value: cache[k]?.totals.value || 0, xirr: cache[k]?.totals.xirr ?? null }));
+    invested: cache[k]?.totals.invested || 0, value: cache[k]?.totals.value || 0,
+    withdrawn: cache[k]?.totals.withdrawn || 0, xirr: cache[k]?.totals.xirr ?? null }));
   const allFunds = keys.flatMap(k => cache[k]?.funds || []);
   famData.yearWise = computeYearWiseJS(allFunds, navSnapshots, today);
   if (document.getElementById('panel-fam').classList.contains('active')) renderFamily();
@@ -681,6 +706,9 @@ function openAddTxn(key) {
   document.getElementById('txnDate').value = td();
   document.getElementById('txnAmount').value = '';
   document.getElementById('txnNav').value = '';
+  document.getElementById('txnSellAll').checked = false;
+  applySellAllState(false);
+  updateSellAllVisibility();
   document.getElementById('txnError').style.display = 'none';
   document.getElementById('txnSubmitBtn').textContent = 'Save Transaction';
   document.getElementById('txnModalOverlay').classList.add('show');
@@ -700,6 +728,8 @@ function openEditTxn(key, id) {
   document.getElementById('txnDate').value = txn.d;
   document.getElementById('txnAmount').value = Math.abs(txn.a);
   document.getElementById('txnNav').value = txn.n || '';
+  applySellAllState(false);
+  updateSellAllVisibility();
   document.getElementById('txnError').style.display = 'none';
   document.getElementById('txnSubmitBtn').textContent = 'Save Changes';
   document.getElementById('txnModalOverlay').classList.add('show');
@@ -707,10 +737,47 @@ function openEditTxn(key, id) {
 
 function closeTxnModal() { document.getElementById('txnModalOverlay').classList.remove('show'); }
 document.addEventListener('change', e => {
-  if (e.target && e.target.id === 'txnFundSelect') {
+  if (!e.target) return;
+  if (e.target.id === 'txnFundSelect') {
     document.getElementById('txnNewFundBlock').style.display = e.target.value === '__new__' ? 'block' : 'none';
+    updateSellAllVisibility();
   }
+  if (e.target.id === 'txnType') updateSellAllVisibility();
+  if (e.target.id === 'txnSellAll') applySellAllState(e.target.checked);
 });
+
+function updateSellAllVisibility() {
+  const type = document.getElementById('txnType').value;
+  const isinSel = document.getElementById('txnFundSelect').value;
+  const show = modalMode === 'add' && type === 'sell' && isinSel !== '__new__';
+  document.getElementById('txnSellAllBlock').style.display = show ? 'block' : 'none';
+  if (!show) {
+    document.getElementById('txnSellAll').checked = false;
+    applySellAllState(false);
+  }
+}
+
+function applySellAllState(checked) {
+  const amountInput = document.getElementById('txnAmount');
+  const amountLabel = document.getElementById('txnAmountLabel');
+  const navLabel = document.getElementById('txnNavLabel');
+  if (checked) {
+    const isin = document.getElementById('txnFundSelect').value;
+    const fund = cache[modalKey]?.funds.find(f => f.isin === isin);
+    amountInput.value = '';
+    amountInput.disabled = true;
+    amountInput.placeholder = 'auto (all units × NAV)';
+    amountLabel.textContent = 'Amount (auto)';
+    navLabel.textContent = 'NAV (required)';
+    const navInput = document.getElementById('txnNav');
+    if (!navInput.value && fund?.liveNav) navInput.value = fund.liveNav;
+  } else {
+    amountInput.disabled = false;
+    amountInput.placeholder = '10000';
+    amountLabel.textContent = 'Amount (₹)';
+    navLabel.textContent = 'NAV (optional)';
+  }
+}
 
 async function submitTxn() {
   const key = modalKey;
@@ -719,18 +786,29 @@ async function submitTxn() {
   const isNew = modalMode === 'add' && isinSel === '__new__';
   const type = document.getElementById('txnType').value;
   const date = document.getElementById('txnDate').value;
-  const amount = parseFloat(document.getElementById('txnAmount').value);
+  const sellAll = modalMode === 'add' && document.getElementById('txnSellAll').checked;
   const navInput = parseFloat(document.getElementById('txnNav').value);
   const errBox = document.getElementById('txnError');
   errBox.style.display = 'none';
 
+  let amount, explicitUnits = null;
+  if (sellAll) {
+    const fund = cache[key]?.funds.find(f => f.isin === isinSel);
+    if (!fund || Math.abs(fund.units) < 0.001) { errBox.textContent = 'No units currently held in this fund to sell.'; errBox.style.display = 'block'; return; }
+    if (!navInput || navInput <= 0) { errBox.textContent = 'NAV is required to sell all units (used to compute the amount).'; errBox.style.display = 'block'; return; }
+    explicitUnits = fund.units;
+    amount = fund.units * navInput;
+  } else {
+    amount = parseFloat(document.getElementById('txnAmount').value);
+  }
   if (!date || !amount || amount <= 0) { errBox.textContent = 'Date and a positive amount are required.'; errBox.style.display = 'block'; return; }
 
   const payload = {
     action: modalMode === 'edit' ? 'edit_txn' : 'add_txn',
     sheet, date, amount: type === 'sell' ? -Math.abs(amount) : Math.abs(amount),
   };
-  if (navInput) { payload.nav = navInput; payload.units = payload.amount / navInput; }
+  if (explicitUnits != null) { payload.units = explicitUnits; payload.nav = navInput; }
+  else if (navInput) { payload.nav = navInput; payload.units = payload.amount / navInput; }
   if (modalMode === 'edit') {
     payload.id = modalEditId;
     payload.isin = isinSel;
