@@ -492,12 +492,21 @@ function lookupExistingFund(ws, isin) {
    How this handles NAV timing correctly:
    - A schedule's "due date" is just the calendar date it's meant to fire (e.g. every
      Tuesday). We never guess at a NAV -- we only ever write a transaction once we've
-     confirmed a *real* NAV exists for that date (or the next actual trading day after
-     it, if the due date was a holiday/weekend).
+     confirmed a *real* NAV exists.
+   - SIPs look FORWARD: confirmed NAV for the due date itself, or the next actual
+     trading day after it if the due date was a holiday/weekend.
+   - SWPs look BACKWARD: this deliberately matches how Zerodha Coin (and similar
+     platforms) actually price scheduled withdrawals -- a Tuesday SWP uses Monday's
+     NAV, not Tuesday's, since the redemption instruction is effectively processed
+     against the prior day's cutoff. This means an SWP's due-date NAV is normally
+     already published by the time its due date arrives, so it typically executes
+     right away rather than waiting a day like a SIP does. The transaction is dated
+     to match whichever day's NAV was actually used (so XIRR timing stays correct),
+     not the nominal due date.
    - "Was it a holiday?" is never looked up from a calendar we'd have to maintain --
      if mfapi.in genuinely has no NAV entry for a date once we're checking a day or
-     more after it, that date simply wasn't a trading day. This stays correct forever
-     with zero maintenance.
+     more after it (SIP) or before it (SWP), that date simply wasn't a trading day.
+     This stays correct forever with zero maintenance.
    - processScheduledSIPs() is meant to be triggered several times a day (see
      setupScheduleTriggers below). Each run is a cheap no-op unless it finds a real,
      previously-unconfirmed NAV -- so it's safe to check early and often. Regular
@@ -515,6 +524,17 @@ function ensureScheduleSheet(ss) {
   }
   return ws;
 }
+
+/** RUN THIS ONCE MANUALLY (function dropdown -> select it -> Run) if the
+    Scheduled_SIPs tab doesn't exist yet. Safe to re-run -- does nothing if it's
+    already there. setupScheduleTriggers() alone does NOT create this sheet; it
+    only sets up the timing triggers -- this is the explicit, no-argument way to
+    force sheet creation without needing to create a schedule from the dashboard first. */
+function createScheduleSheetNow() {
+  const ws = ensureScheduleSheet(SpreadsheetApp.openById(SHEET_ID));
+  Logger.log(`"${SCHEDULE_SHEET}" sheet is ready (${ws.getLastRow() - 1} existing schedules).`);
+}
+
 
 function toISO(d) {
   const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
@@ -582,6 +602,38 @@ function findNextAvailableNAV(isin, targetDateStr) {
       if (parts.length !== 3) continue;
       const iso = `${parts[2]}-${parts[1]}-${parts[0]}`;
       if (iso >= targetDateStr && (!best || iso < best.date)) {
+        best = { date: iso, nav: parseFloat(row.nav) };
+      }
+    }
+    return best;
+  } catch (e) {
+    Logger.log(`NAV check failed for ${isin}: ${e.message}`);
+    return null;
+  }
+}
+
+/** SWP-specific: finds the most recent already-published NAV *before* beforeDateStr,
+    matching how Coin/similar platforms actually price scheduled withdrawals (a Tuesday
+    SWP uses Monday's NAV, not Tuesday's). Unlike SIPs, this never has to "wait" for
+    anything -- the prior trading day's NAV is already published by the time the due
+    date arrives, so an SWP can typically execute right on its due date, first check
+    of the day. This also handles holidays automatically: if the due date itself was
+    a holiday, "the most recent prior trading day" still resolves correctly with no
+    extra logic needed. */
+function findPreviousAvailableNAV(isin, beforeDateStr) {
+  const schemeCode = resolveSchemeCode(isin);
+  if (!schemeCode) return null;
+  try {
+    const res = UrlFetchApp.fetch(`https://api.mfapi.in/mf/${schemeCode}`, { muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) return null;
+    const j = JSON.parse(res.getContentText());
+    const rows = j.data || [];
+    let best = null;
+    for (const row of rows) {
+      const parts = row.date.split('-'); // dd-mm-yyyy
+      if (parts.length !== 3) continue;
+      const iso = `${parts[2]}-${parts[1]}-${parts[0]}`;
+      if (iso < beforeDateStr && (!best || iso > best.date)) {
         best = { date: iso, nav: parseFloat(row.nav) };
       }
     }
@@ -674,11 +726,11 @@ function processScheduledSIPs() {
     const nextDue = row[10] ? row[10].toString() : '';
     if (!nextDue || nextDue > today) continue;
 
-    const isin = row[2];
-    const found = findNextAvailableNAV(isin, nextDue);
+    const isin = row[2], kind = row[6];
+    const found = kind === 'swp' ? findPreviousAvailableNAV(isin, nextDue) : findNextAvailableNAV(isin, nextDue);
     if (!found || found.date > today) continue; // not confirmed yet -- try again next run
 
-    const sheetName = row[1], amount = parseFloat(row[5]), kind = row[6];
+    const sheetName = row[1], amount = parseFloat(row[5]);
     const frequency = row[7], dayValue = parseInt(row[8]);
     const targetWs = ss.getSheetByName(sheetName);
     if (!targetWs) continue;
