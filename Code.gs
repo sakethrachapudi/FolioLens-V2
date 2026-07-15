@@ -1,6 +1,7 @@
 const SHEET_ID = '1rRAjgjopXY6_qnmmodC6-F5fFC6eEjECu5SNmLTNj_Q';
 const ALLOWED_SHEETS = ['Saketh', 'Suneetha', 'Samhitha', 'Babu'];
 const ID_COL = 8; // column H
+const SCHEDULE_SHEET = 'Scheduled_SIPs';
 
 const ISIN_SCHEME = {
   "INF090I01171":100471,"INF179K01608":101762,"INF789F01810":102394,
@@ -28,6 +29,11 @@ function doGet(e) {
 
     if (action === 'nav_snapshots') {
       return respond(callback, getNavSnapshots());
+    }
+
+    if (action === 'schedules') {
+      if (!sheet || !ALLOWED_SHEETS.includes(sheet)) return respond(callback, { error: 'Invalid or missing sheet name' });
+      return respond(callback, getSchedules(sheet));
     }
 
     if (!sheet || !ALLOWED_SHEETS.includes(sheet)) {
@@ -297,6 +303,8 @@ function doPost(e) {
     const action = body.action || 'add_txn';
     if (action === 'edit_txn') return handleEditTxn(body);
     if (action === 'delete_txn') return handleDeleteTxn(body);
+    if (action === 'create_schedule') return handleCreateSchedule(body);
+    if (action === 'set_schedule_status') return handleSetScheduleStatus(body);
     return handleAddTxn(body);
   } catch (err) {
     return respond(null, { error: err.message });
@@ -477,6 +485,233 @@ function lookupExistingFund(ws, isin) {
   }
   return null;
 }
+
+/* ============================================================
+   SIP / SWP SCHEDULING
+   ============================================================
+   How this handles NAV timing correctly:
+   - A schedule's "due date" is just the calendar date it's meant to fire (e.g. every
+     Tuesday). We never guess at a NAV -- we only ever write a transaction once we've
+     confirmed a *real* NAV exists for that date (or the next actual trading day after
+     it, if the due date was a holiday/weekend).
+   - "Was it a holiday?" is never looked up from a calendar we'd have to maintain --
+     if mfapi.in genuinely has no NAV entry for a date once we're checking a day or
+     more after it, that date simply wasn't a trading day. This stays correct forever
+     with zero maintenance.
+   - processScheduledSIPs() is meant to be triggered several times a day (see
+     setupScheduleTriggers below). Each run is a cheap no-op unless it finds a real,
+     previously-unconfirmed NAV -- so it's safe to check early and often. Regular
+     schemes typically resolve on the first morning run; Fund of Funds (which SEBI
+     allows until 10am the *next* day) naturally resolve on a later run the same way,
+     with no special-casing needed.
+   ============================================================ */
+
+function ensureScheduleSheet(ss) {
+  let ws = ss.getSheetByName(SCHEDULE_SHEET);
+  if (!ws) {
+    ws = ss.insertSheet(SCHEDULE_SHEET);
+    ws.appendRow(['ScheduleID', 'Sheet', 'ISIN', 'FundName', 'Category', 'Amount', 'Kind',
+      'Frequency', 'DayValue', 'Status', 'NextDueDate', 'LastProcessedDate', 'CreatedAt']);
+  }
+  return ws;
+}
+
+function toISO(d) {
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** dayValue: weekly = 1(Mon)..7(Sun) ISO weekday; monthly = 1..31 day-of-month. */
+function computeFirstDueDate(frequency, dayValue, startDateStr) {
+  let d = new Date(startDateStr + 'T00:00:00');
+  if (frequency === 'weekly') {
+    const jsDay = d.getDay();          // 0=Sun..6=Sat
+    const wantJsDay = dayValue % 7;    // 1..7(Mon..Sun) -> 1..6,0
+    const diff = (wantJsDay - jsDay + 7) % 7;
+    d.setDate(d.getDate() + diff);
+  } else {
+    const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    const targetDay = Math.min(dayValue, daysInMonth);
+    if (d.getDate() > targetDay) {
+      // Compute the target year/month BEFORE constructing the date -- setting the
+      // month while the day-of-month still holds a large value (e.g. 31) silently
+      // overflows past short months (Jan 31 -> "Feb 31" doesn't exist -> rolls to
+      // March). Clamping the day only after landing on the right month avoids this.
+      let y = d.getFullYear(), m = d.getMonth() + 1;
+      if (m > 11) { m = 0; y += 1; }
+      const dim2 = new Date(y, m + 1, 0).getDate();
+      d = new Date(y, m, Math.min(dayValue, dim2));
+    } else {
+      d.setDate(targetDay);
+    }
+  }
+  return toISO(d);
+}
+
+/** Advances to the next cycle from a fixed anchor -- always from the *scheduled* date,
+    never from a holiday-shifted execution date, so a one-off shift never causes drift
+    (e.g. a Diwali Tuesday shifting to Wednesday doesn't turn all future weeks into
+    Wednesdays -- next week still targets Tuesday). */
+function addPeriod(dateStr, frequency, dayValue) {
+  const d = new Date(dateStr + 'T00:00:00');
+  if (frequency === 'weekly') {
+    d.setDate(d.getDate() + 7);
+    return toISO(d);
+  }
+  let y = d.getFullYear(), m = d.getMonth() + 1;
+  if (m > 11) { m = 0; y += 1; }
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+  return toISO(new Date(y, m, Math.min(dayValue, daysInMonth)));
+}
+
+/** Finds the earliest confirmed NAV on or after targetDateStr. Returns null if nothing
+    is confirmed yet (due date's NAV hasn't published, or -- indistinguishably, which is
+    fine -- it's a holiday and the next trading day's NAV isn't out yet either). Safe to
+    call repeatedly; it just means "not ready yet, try again on the next run." */
+function findNextAvailableNAV(isin, targetDateStr) {
+  const schemeCode = resolveSchemeCode(isin);
+  if (!schemeCode) return null;
+  try {
+    const res = UrlFetchApp.fetch(`https://api.mfapi.in/mf/${schemeCode}`, { muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) return null;
+    const j = JSON.parse(res.getContentText());
+    const rows = j.data || [];
+    let best = null;
+    for (const row of rows) {
+      const parts = row.date.split('-'); // dd-mm-yyyy
+      if (parts.length !== 3) continue;
+      const iso = `${parts[2]}-${parts[1]}-${parts[0]}`;
+      if (iso >= targetDateStr && (!best || iso < best.date)) {
+        best = { date: iso, nav: parseFloat(row.nav) };
+      }
+    }
+    return best;
+  } catch (e) {
+    Logger.log(`NAV check failed for ${isin}: ${e.message}`);
+    return null;
+  }
+}
+
+function getSchedules(sheetName) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const ws = ensureScheduleSheet(ss);
+  const data = ws.getDataRange().getValues();
+  const out = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (!row[0] || row[1] !== sheetName) continue;
+    out.push({
+      id: row[0].toString(), sheet: row[1], isin: row[2], name: row[3], cat: row[4],
+      amount: parseFloat(row[5]), kind: row[6], frequency: row[7], dayValue: parseInt(row[8]),
+      status: row[9], nextDueDate: row[10] ? row[10].toString() : '',
+      lastProcessedDate: row[11] ? row[11].toString() : '',
+    });
+  }
+  return { schedules: out };
+}
+
+function handleCreateSchedule(body) {
+  const sheet = body.sheet;
+  if (!sheet || !ALLOWED_SHEETS.includes(sheet)) return respond(null, { error: 'Invalid or missing sheet name' });
+  const isin = (body.isin || '').toString().trim();
+  const amount = parseFloat(body.amount);
+  const kind = body.kind === 'swp' ? 'swp' : 'sip';
+  const frequency = body.frequency === 'monthly' ? 'monthly' : 'weekly';
+  const dayValue = parseInt(body.dayValue);
+  const startDate = (body.startDate || toISO(new Date())).toString();
+  if (!isin || !amount || amount <= 0 || !dayValue) {
+    return respond(null, { error: 'Fund, amount, and day are required' });
+  }
+
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const targetWs = ss.getSheetByName(sheet);
+  const existing = targetWs ? lookupExistingFund(targetWs, isin) : null;
+  const name = (body.name || (existing ? existing.name : '')).toString().trim();
+  const cat = (body.cat || (existing ? existing.cat : 'Other')).toString().trim() || 'Other';
+  if (!name) return respond(null, { error: 'Fund name required for a new fund.' });
+  if (kind === 'swp' && !existing) return respond(null, { error: 'Cannot create an SWP for a fund with no current holding.' });
+
+  const nextDue = computeFirstDueDate(frequency, dayValue, startDate);
+  const ws = ensureScheduleSheet(ss);
+  const id = Utilities.getUuid();
+  ws.appendRow([id, sheet, isin, name, cat, amount, kind, frequency, dayValue, 'active', nextDue, '', new Date().toISOString()]);
+  return respond(null, { success: true, id, nextDueDate: nextDue });
+}
+
+function handleSetScheduleStatus(body) {
+  const id = body.id, newStatus = body.status;
+  if (!id || ['active', 'paused', 'stopped'].indexOf(newStatus) === -1) {
+    return respond(null, { error: 'Invalid id or status' });
+  }
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const ws = ensureScheduleSheet(ss);
+  const data = ws.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] && data[i][0].toString() === id) {
+      ws.getRange(i + 1, 10).setValue(newStatus);
+      return respond(null, { success: true });
+    }
+  }
+  return respond(null, { error: 'Schedule not found' });
+}
+
+/**
+ * The processor. Meant to run several times a day (see setupScheduleTriggers).
+ * For every active, due schedule: checks whether a real NAV is confirmed for its due
+ * date (or the next actual trading day, if the due date was a holiday); if so, writes
+ * the transaction with that real date and NAV, then advances to the next cycle. If not
+ * yet confirmed, leaves it untouched -- it'll be picked up on a later run once ready.
+ */
+function processScheduledSIPs() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const ws = ensureScheduleSheet(ss);
+  const data = ws.getDataRange().getValues();
+  const today = toISO(new Date());
+
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (row[9] !== 'active') continue;
+    const nextDue = row[10] ? row[10].toString() : '';
+    if (!nextDue || nextDue > today) continue;
+
+    const isin = row[2];
+    const found = findNextAvailableNAV(isin, nextDue);
+    if (!found || found.date > today) continue; // not confirmed yet -- try again next run
+
+    const sheetName = row[1], amount = parseFloat(row[5]), kind = row[6];
+    const frequency = row[7], dayValue = parseInt(row[8]);
+    const targetWs = ss.getSheetByName(sheetName);
+    if (!targetWs) continue;
+
+    const type = kind === 'swp' ? 'sell' : 'buy';
+    const units = amount / found.nav;
+    targetWs.appendRow([row[3], isin, row[4], found.date, type, round3(units), round2(found.nav), Utilities.getUuid()]);
+
+    const newNextDue = addPeriod(nextDue, frequency, dayValue);
+    ws.getRange(i + 1, 11).setValue(newNextDue);
+    ws.getRange(i + 1, 12).setValue(found.date);
+    Logger.log(`Processed ${kind.toUpperCase()} — ${row[3]} (${sheetName}): ${found.date} @ ₹${found.nav}, next due ${newNextDue}`);
+  }
+}
+
+/**
+ * RUN THIS ONCE MANUALLY to enable SIP/SWP automation. Sets up daily checks at
+ * 6am, 8am, 10am, 12pm and 8pm (script timezone -- verify it's set to Asia/Kolkata
+ * under Project Settings, or these will fire at the wrong local time). Multiple
+ * checks are cheap and safe (see the big comment above processScheduledSIPs) --
+ * regular schemes typically resolve on the first morning run, Fund of Funds on a
+ * later one, with no manual tuning needed either way.
+ */
+function setupScheduleTriggers() {
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === 'processScheduledSIPs') ScriptApp.deleteTrigger(t);
+  });
+  [6, 8, 10, 12, 20].forEach(hour => {
+    ScriptApp.newTrigger('processScheduledSIPs').timeBased().everyDays(1).atHour(hour).create();
+  });
+  Logger.log('SIP/SWP triggers set: processScheduledSIPs will run daily at ~6am, 8am, 10am, 12pm, 8pm.');
+}
+
 
 function respond(callback, data) {
   const json = JSON.stringify(data);

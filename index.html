@@ -158,6 +158,51 @@
   </div>
 </div>
 
+<!-- Create SIP/SWP modal -->
+<div class="modal-overlay" id="schModalOverlay">
+  <div class="modal">
+    <h3 id="schModalTitle">Create SIP</h3>
+    <div class="field">
+      <label>Fund</label>
+      <select id="schFundSelect"></select>
+    </div>
+    <div id="schNewFundBlock" style="display:none">
+      <div class="field"><label>ISIN</label><input type="text" id="schNewIsin" placeholder="e.g. INF090I01171"></div>
+      <div class="field"><label>Fund Name</label><input type="text" id="schNewName" placeholder="e.g. Parag Parikh Flexi Cap"></div>
+      <div class="field"><label>Category</label><input type="text" id="schNewCat" placeholder="e.g. Flexi Cap"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Amount per occurrence (₹)</label><input type="number" id="schAmount" placeholder="5000"></div>
+      <div class="field"><label>Frequency</label>
+        <select id="schFrequency">
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+        </select>
+      </div>
+    </div>
+    <div class="field" id="schDayWeeklyField">
+      <label>Day of week</label>
+      <select id="schDayWeekly">
+        <option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option>
+        <option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="7">Sunday</option>
+      </select>
+    </div>
+    <div class="field" id="schDayMonthlyField" style="display:none">
+      <label>Day of month</label>
+      <input type="number" id="schDayMonthly" min="1" max="31" placeholder="10">
+    </div>
+    <div class="field"><label>Start date</label><input type="date" id="schStartDate"></div>
+    <p style="font-size:11.5px;color:var(--tx2);margin:-4px 0 12px">
+      If a market holiday falls on the scheduled day, it automatically shifts to the next trading day — same as Zerodha Coin.
+    </p>
+    <div class="err-box" id="schError"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="closeSchModal()">Cancel</button>
+      <button class="btn primary" id="schSubmitBtn" onclick="submitSchedule()">Create</button>
+    </div>
+  </div>
+</div>
+
 <!-- NAV history modal -->
 <div class="modal-overlay" id="navModalOverlay">
   <div class="modal">

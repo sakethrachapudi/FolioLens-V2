@@ -134,6 +134,19 @@ function fetchNavSnapshotsLive() {
   });
 }
 
+function fetchSchedulesLive(sheetName) {
+  return new Promise((resolve, reject) => {
+    const cbName = 'cb_' + Math.random().toString(36).slice(2);
+    const script = document.createElement('script');
+    let done = false;
+    window[cbName] = (data) => { done = true; delete window[cbName]; script.remove(); resolve(data); };
+    script.onerror = () => { if (!done) { delete window[cbName]; script.remove(); reject(new Error('schedules fetch failed')); } };
+    script.src = `${API_URL}?action=schedules&sheet=${encodeURIComponent(sheetName)}&callback=${cbName}`;
+    document.body.appendChild(script);
+    setTimeout(() => { if (!done) { delete window[cbName]; script.remove(); reject(new Error('timeout')); } }, 20000);
+  });
+}
+
 /* client-side year-wise growth (mirrors etl/build_data.py's compute_year_wise()) */
 function computeYearWiseJS(funds, navSnapshots, today) {
   const currentYear = String(new Date(today).getFullYear());
@@ -388,6 +401,160 @@ function renderSWP(key, swp) {
   }
 }
 
+/* ============================================================
+   SIP / SWP SCHEDULES
+   ============================================================ */
+async function loadSchedules(key) {
+  try {
+    const raw = await fetchSchedulesLive(PORTFOLIOS[key].sheet);
+    renderSchedules(key, raw.schedules || []);
+  } catch (e) {
+    console.warn('Could not load schedules for', key, e);
+  }
+}
+
+const DOW_LABEL = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function renderSchedules(key, schedules) {
+  const header = document.getElementById(`${key}-schedHeader`);
+  if (!schedules.length) { header.style.display = 'none'; return; }
+  header.style.display = '';
+  const activeCount = schedules.filter(s => s.status === 'active').length;
+  document.getElementById(`${key}-schedCount`).textContent = `${activeCount} active · ${schedules.length} total`;
+
+  document.getElementById(`${key}-schedBody`).innerHTML = schedules.map(s => {
+    const dayLabel = s.frequency === 'weekly' ? DOW_LABEL[s.dayValue] || '' : `Day ${s.dayValue}`;
+    const statusBadge = s.status === 'active' ? '<span class="bg bgp">Active</span>'
+      : s.status === 'paused' ? '<span class="bg bgw">Paused</span>'
+      : '<span class="bg bgo">Stopped</span>';
+    const kindBadge = s.kind === 'swp' ? '<span class="bg bgn">SWP</span>' : '<span class="bg bgp">SIP</span>';
+    let actions = '<span class="fund-cat">—</span>';
+    if (s.status === 'active') {
+      actions = `<div class="txn-actions">
+        <button class="txn-act-btn" title="Pause" onclick="setScheduleStatus('${key}','${s.id}','paused')">⏸</button>
+        <button class="txn-act-btn danger" title="Stop" onclick="setScheduleStatus('${key}','${s.id}','stopped')">■</button>
+      </div>`;
+    } else if (s.status === 'paused') {
+      actions = `<div class="txn-actions">
+        <button class="txn-act-btn" title="Resume" onclick="setScheduleStatus('${key}','${s.id}','active')">▶</button>
+        <button class="txn-act-btn danger" title="Stop" onclick="setScheduleStatus('${key}','${s.id}','stopped')">■</button>
+      </div>`;
+    }
+    return `<tr>
+      <td>${esc(s.name)}<br><span class="fund-cat">${esc(s.cat)}</span></td>
+      <td>${kindBadge}</td>
+      <td class="r mo">${fmt(s.amount)}</td>
+      <td class="mo">${s.frequency === 'weekly' ? 'Weekly · ' + dayLabel : 'Monthly · Day ' + s.dayValue}</td>
+      <td class="mo">${s.nextDueDate || '—'}</td>
+      <td>${statusBadge}</td>
+      <td class="r">${actions}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function setScheduleStatus(key, id, newStatus) {
+  if (!checkPinUnlock()) return;
+  if (newStatus === 'stopped' && !confirm('Stop this schedule permanently? It cannot be resumed later -- you would need to create a new one.')) return;
+  try {
+    const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'set_schedule_status', id, status: newStatus }) });
+    const j = await res.json().catch(() => ({}));
+    if (j && j.error) throw new Error(j.error);
+    toast(newStatus === 'active' ? 'Resumed' : newStatus === 'paused' ? 'Paused' : 'Stopped');
+    loadSchedules(key);
+  } catch (e) {
+    toast('Could not update: ' + e.message);
+  }
+}
+
+/* ---------- Create SIP/SWP modal ---------- */
+let schModalKey = null, schModalKind = 'sip';
+
+function openCreateSchedule(key, kind) {
+  if (!checkPinUnlock()) return;
+  schModalKey = key; schModalKind = kind;
+  document.getElementById('schModalTitle').textContent = `${kind === 'swp' ? 'Create SWP' : 'Create SIP'} — ${PORTFOLIOS[key].label}`;
+
+  const sel = document.getElementById('schFundSelect');
+  const activeFunds = cache[key].funds.filter(f => Math.abs(f.units) > 0.001);
+  let options = activeFunds.map(f => `<option value="${f.isin}">${esc(f.name)}</option>`).join('');
+  if (kind === 'sip') options = '<option value="__new__">+ New fund…</option>' + options;
+  sel.innerHTML = options || '<option value="">No active funds -- add one first</option>';
+
+  document.getElementById('schNewFundBlock').style.display = 'none';
+  document.getElementById('schAmount').value = '';
+  document.getElementById('schFrequency').value = 'weekly';
+  document.getElementById('schDayWeekly').value = '1';
+  document.getElementById('schDayMonthly').value = '';
+  document.getElementById('schStartDate').value = td();
+  updateSchDayFields();
+  updateSchNewFundVisibility();
+  document.getElementById('schError').style.display = 'none';
+  document.getElementById('schSubmitBtn').disabled = false;
+  document.getElementById('schSubmitBtn').textContent = 'Create';
+  document.getElementById('schModalOverlay').classList.add('show');
+}
+
+function closeSchModal() { document.getElementById('schModalOverlay').classList.remove('show'); }
+
+function updateSchDayFields() {
+  const freq = document.getElementById('schFrequency').value;
+  document.getElementById('schDayWeeklyField').style.display = freq === 'weekly' ? 'block' : 'none';
+  document.getElementById('schDayMonthlyField').style.display = freq === 'monthly' ? 'block' : 'none';
+}
+
+function updateSchNewFundVisibility() {
+  const sel = document.getElementById('schFundSelect');
+  document.getElementById('schNewFundBlock').style.display = sel.value === '__new__' ? 'block' : 'none';
+}
+
+async function submitSchedule() {
+  const key = schModalKey;
+  const sheet = PORTFOLIOS[key].sheet;
+  const isinSel = document.getElementById('schFundSelect').value;
+  const isNew = schModalKind === 'sip' && isinSel === '__new__';
+  const amount = parseFloat(document.getElementById('schAmount').value);
+  const frequency = document.getElementById('schFrequency').value;
+  const dayValue = frequency === 'weekly'
+    ? parseInt(document.getElementById('schDayWeekly').value)
+    : parseInt(document.getElementById('schDayMonthly').value);
+  const startDate = document.getElementById('schStartDate').value;
+  const errBox = document.getElementById('schError');
+  errBox.style.display = 'none';
+
+  if (!isinSel) { errBox.textContent = 'No fund selected.'; errBox.style.display = 'block'; return; }
+  if (!amount || amount <= 0) { errBox.textContent = 'A positive amount is required.'; errBox.style.display = 'block'; return; }
+  if (!dayValue || (frequency === 'monthly' && (dayValue < 1 || dayValue > 31))) {
+    errBox.textContent = 'Please pick a valid day.'; errBox.style.display = 'block'; return;
+  }
+  if (!startDate) { errBox.textContent = 'Start date is required.'; errBox.style.display = 'block'; return; }
+
+  const payload = { action: 'create_schedule', sheet, kind: schModalKind, amount, frequency, dayValue, startDate };
+  if (isNew) {
+    payload.isin = document.getElementById('schNewIsin').value.trim();
+    payload.name = document.getElementById('schNewName').value.trim();
+    payload.cat = document.getElementById('schNewCat').value.trim();
+    if (!payload.isin || !payload.name) { errBox.textContent = 'New fund needs at least ISIN and name.'; errBox.style.display = 'block'; return; }
+  } else {
+    payload.isin = isinSel;
+  }
+
+  const btn = document.getElementById('schSubmitBtn');
+  btn.disabled = true; btn.textContent = 'Creating…';
+  try {
+    const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) });
+    const j = await res.json().catch(() => ({}));
+    if (j && j.error) throw new Error(j.error);
+    btn.textContent = 'Created ✓';
+    toast(`${schModalKind.toUpperCase()} scheduled — next due ${j.nextDueDate || ''}`);
+    setTimeout(() => { closeSchModal(); btn.disabled = false; btn.textContent = 'Create'; loadSchedules(key); }, 700);
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Create';
+    errBox.textContent = 'Could not create — ' + e.message;
+    errBox.style.display = 'block';
+  }
+}
+
 /* ---------- transaction log (search + pagination) ---------- */
 function renderTxnLog(key, funds) {
   const all = funds.flatMap(f => f.txns.map(t => ({ ...t, fundName: f.name, isin: f.isin, cat: f.cat })));
@@ -616,6 +783,7 @@ async function refreshLive(key, silent) {
   toast(`Synced · ${p.funds.length} funds, ${updated} live NAVs`);
 
   syncFamilyFromCache(navSnapshots, today);
+  loadSchedules(key);
 }
 
 function recomputeSWP(funds, totalValue, portXirr, todayStr) {
@@ -757,6 +925,8 @@ document.addEventListener('change', e => {
   if (!e.target) return;
   if (e.target.id === 'txnType') updateSellAllVisibility();
   if (e.target.id === 'txnSellAll') applySellAllState(e.target.checked);
+  if (e.target.id === 'schFrequency') updateSchDayFields();
+  if (e.target.id === 'schFundSelect') updateSchNewFundVisibility();
 });
 
 function updateSellAllVisibility() {
@@ -898,6 +1068,8 @@ function wireEvents() {
   Object.keys(PORTFOLIOS).forEach(key => {
     document.getElementById(`${key}-refreshBtn`).addEventListener('click', () => refreshLive(key));
     document.getElementById(`${key}-addTxnBtn`).addEventListener('click', () => openAddTxn(key));
+    document.getElementById(`${key}-createSipBtn`).addEventListener('click', () => openCreateSchedule(key, 'sip'));
+    document.getElementById(`${key}-createSwpBtn`).addEventListener('click', () => openCreateSchedule(key, 'swp'));
     document.getElementById(`${key}-exportHoldBtn`).addEventListener('click', () => exportHoldingsCSV(key));
     document.getElementById(`${key}-exportTxnBtn`).addEventListener('click', () => exportTxnCSV(key));
     document.getElementById(`${key}-printBtn`).addEventListener('click', () => window.print());
@@ -913,6 +1085,7 @@ function wireEvents() {
 
   document.getElementById('txnModalOverlay').addEventListener('click', e => { if (e.target.id === 'txnModalOverlay') closeTxnModal(); });
   document.getElementById('navModalOverlay').addEventListener('click', e => { if (e.target.id === 'navModalOverlay') closeNavHistory(); });
+  document.getElementById('schModalOverlay').addEventListener('click', e => { if (e.target.id === 'schModalOverlay') closeSchModal(); });
 }
 
 async function init() {
@@ -924,6 +1097,7 @@ async function init() {
   try {
     await loadData();
     Object.keys(PORTFOLIOS).forEach(renderPortfolio);
+    Object.keys(PORTFOLIOS).forEach(loadSchedules);
     renderFamily();
     const gen = new Date(dataMeta.generatedAt);
     document.getElementById('dataFreshness').textContent = `Data as of ${gen.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })} · auto-refreshes every 6h`;
