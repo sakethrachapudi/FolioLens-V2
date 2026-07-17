@@ -57,7 +57,7 @@ header.top{position:sticky;top:0;z-index:40;background:rgba(14,17,23,.92);backdr
 .btn.primary{background:var(--ac);color:#04160c;border-color:var(--ac);}
 
 .cards{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:16px;}
-@media(min-width:640px){.cards{grid-template-columns:repeat(4,1fr);}}
+@media(min-width:640px){.cards{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));}}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px;}
 .card.ac{border-color:color-mix(in srgb, var(--pac,var(--ac)) 45%, var(--bd));
   background:linear-gradient(180deg, color-mix(in srgb, var(--pac,var(--ac)) 8%, var(--card)), var(--card));}

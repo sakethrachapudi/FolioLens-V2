@@ -349,6 +349,7 @@ function handleAddTxn(body) {
   cat = cat || 'Other';
 
   ws.appendRow([name, isin, cat, date, type, round3(units), round2(nav), Utilities.getUuid()]);
+  triggerGitHubActionRefresh();
 
   return respond(null, { success: true, isin, name, cat, type, units: round3(units), nav: round2(nav) });
 }
@@ -389,6 +390,7 @@ function handleEditTxn(body) {
   ws.getRange(row, 7).setValue(round2(nav));     // price/nav
   // columns 1-3 (name/isin/cat) and 8 (id) are left untouched — you can't move a
   // transaction to a different fund via edit; delete and re-add instead.
+  triggerGitHubActionRefresh();
 
   return respond(null, { success: true, type, units: round3(units), nav: round2(nav) });
 }
@@ -406,6 +408,7 @@ function handleDeleteTxn(body) {
     return respond(null, { error: 'Transaction not found. If this was added before the ID column existed, run backfillTxnIDs() once from the Apps Script editor.' });
   }
   ws.deleteRow(row);
+  triggerGitHubActionRefresh();
   return respond(null, { success: true });
 }
 
@@ -719,6 +722,7 @@ function processScheduledSIPs() {
   const ws = ensureScheduleSheet(ss);
   const data = ws.getDataRange().getValues();
   const today = toISO(new Date());
+  let processedAny = false;
 
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
@@ -738,12 +742,15 @@ function processScheduledSIPs() {
     const type = kind === 'swp' ? 'sell' : 'buy';
     const units = amount / found.nav;
     targetWs.appendRow([row[3], isin, row[4], found.date, type, round3(units), round2(found.nav), Utilities.getUuid()]);
+    processedAny = true;
 
     const newNextDue = addPeriod(nextDue, frequency, dayValue);
     ws.getRange(i + 1, 11).setValue(newNextDue);
     ws.getRange(i + 1, 12).setValue(found.date);
     Logger.log(`Processed ${kind.toUpperCase()} — ${row[3]} (${sheetName}): ${found.date} @ ₹${found.nav}, next due ${newNextDue}`);
   }
+
+  if (processedAny) triggerGitHubActionRefresh();
 }
 
 /**
@@ -762,6 +769,56 @@ function setupScheduleTriggers() {
     ScriptApp.newTrigger('processScheduledSIPs').timeBased().everyDays(1).atHour(hour).create();
   });
   Logger.log('SIP/SWP triggers set: processScheduledSIPs will run daily at ~6am, 8am, 10am, 12pm, 8pm.');
+}
+
+
+/**
+ * Best-effort trigger of the GitHub Actions data-refresh workflow, called after any
+ * successful transaction write (add/edit/delete, or a processed SIP/SWP) so data.json
+ * updates within moments instead of waiting for the next 6-hourly scheduled run.
+ * Wrapped so a failure here (missing token, network issue, etc.) can NEVER break the
+ * actual transaction save, which has already succeeded by the time this runs.
+ *
+ * One-time setup required (see setupGitHubTrigger below for the guided version):
+ *   Script Properties (Project Settings -> Script Properties) needs:
+ *     GITHUB_PAT    - a fine-grained Personal Access Token scoped to just this repo,
+ *                     with "Actions: read and write" permission
+ *     GITHUB_OWNER  - your GitHub username (defaults to 'sakethrachapudi' if unset)
+ *     GITHUB_REPO   - the repo name (defaults to 'FolioLens-V2' if unset)
+ */
+function triggerGitHubActionRefresh() {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const token = props.getProperty('GITHUB_PAT');
+    if (!token) { Logger.log('GITHUB_PAT not set -- skipping auto-trigger (data.json will still update on the next scheduled 6h run).'); return; }
+    const owner = props.getProperty('GITHUB_OWNER') || 'sakethrachapudi';
+    const repo = props.getProperty('GITHUB_REPO') || 'FolioLens-V2';
+    const workflowFile = props.getProperty('GITHUB_WORKFLOW') || 'refresh-data.yml';
+
+    const url = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflowFile}/dispatches`;
+    const res = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+      payload: JSON.stringify({ ref: 'main' }),
+      muteHttpExceptions: true,
+    });
+    const code = res.getResponseCode();
+    if (code === 204) {
+      Logger.log('GitHub Action refresh triggered.');
+    } else {
+      Logger.log(`GitHub Action trigger failed (HTTP ${code}): ${res.getContentText()}`);
+    }
+  } catch (e) {
+    Logger.log(`GitHub Action trigger error: ${e.message}`);
+  }
+}
+
+/** RUN THIS ONCE to check your GitHub trigger setup without needing a real transaction.
+    Confirms the token/owner/repo/workflow are all correctly configured. */
+function testGitHubTrigger() {
+  triggerGitHubActionRefresh();
+  Logger.log("Check the log above -- 'triggered' means it worked; check your repo's Actions tab to confirm a new run started.");
 }
 
 

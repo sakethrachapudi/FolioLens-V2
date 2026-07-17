@@ -92,14 +92,15 @@ async function fetchNAVLive(isin) {
         const j = await r.json();
         if (j && j.data && j.data[0]) {
           const nav = parseFloat(j.data[0].nav);
-          if (nav > 0) return { nav };
+          const prevNav = j.data[1] ? parseFloat(j.data[1].nav) : null;
+          if (nav > 0) return { nav, prevNav: prevNav > 0 ? prevNav : null };
         }
       }
     } catch (e) { /* fall through */ }
   }
   try {
     const r = await fetchWithTimeout(`https://mf.captnemo.in/nav/${isin}`, 12000);
-    if (r.ok) { const j = await r.json(); if (j.nav && parseFloat(j.nav) > 0) return { nav: parseFloat(j.nav) }; }
+    if (r.ok) { const j = await r.json(); if (j.nav && parseFloat(j.nav) > 0) return { nav: parseFloat(j.nav), prevNav: null }; }
   } catch (e) { /* give up */ }
   return null;
 }
@@ -261,6 +262,9 @@ function renderPortfolio(key) {
   document.getElementById(`${key}-xirr`).innerHTML = `<span class="${posC(t.xirr)}">${t.xirr!=null?pct(t.xirr):'—'}</span>`;
   document.getElementById(`${key}-gainAbs`).innerHTML = `<span class="${posC(gain)}">${gain>=0?'+':'-'}${fmt(Math.abs(gain))}</span>`;
   document.getElementById(`${key}-mult`).textContent = t.invested ? `${((t.value+withdrawn)/t.invested).toFixed(2)}x invested (incl. withdrawn)` : '—';
+  const dp = t.dayPnl || 0;
+  document.getElementById(`${key}-dayPnl`).innerHTML = `<span class="${posC(dp)}">${dp>=0?'+':'-'}${fmt(Math.abs(dp))}</span>`;
+  document.getElementById(`${key}-dayPnlSub`).textContent = t.dayPnlPct != null ? `${pct(t.dayPnlPct)} vs previous close` : 'no live NAVs to compare';
 
   const rows = p.funds.map((f, i) => ({ ...f, color: PAL[i % PAL.length] }));
   const EPS = 0.001;
@@ -668,6 +672,9 @@ function renderFamily() {
   document.getElementById('fam-xirr').innerHTML = `<span class="${posC(t.xirr)}">${t.xirr!=null?pct(t.xirr):'—'}</span>`;
   document.getElementById('fam-gainAbs').innerHTML = `<span class="${posC(t.gain)}">${t.gain>=0?'+':'-'}${fmt(Math.abs(t.gain))}</span>`;
   document.getElementById('fam-mult').textContent = t.invested ? `${((t.value+famWithdrawn)/t.invested).toFixed(2)}x invested (incl. withdrawn)` : '—';
+  const famDp = t.dayPnl || 0;
+  document.getElementById('fam-dayPnl').innerHTML = `<span class="${posC(famDp)}">${famDp>=0?'+':'-'}${fmt(Math.abs(famDp))}</span>`;
+  document.getElementById('fam-dayPnlSub').textContent = t.dayPnlPct != null ? `${pct(t.dayPnlPct)} vs previous close` : 'no live NAVs to compare';
 
   const cb = document.getElementById('fam-compareBody');
   cb.innerHTML = famData.compare.map(r => {
@@ -718,7 +725,8 @@ async function refreshLive(key, silent) {
   document.getElementById(`${key}-statusTxt`).textContent = 'Syncing transactions…';
 
   const today = td();
-  const oldNavHistory = {}; p.funds.forEach(f => { oldNavHistory[f.isin] = f.navHistory; });
+  const oldNavHistory = {}; const oldPrevNav = {};
+  p.funds.forEach(f => { oldNavHistory[f.isin] = f.navHistory; oldPrevNav[f.isin] = f.prevNav; });
 
   // 1) re-fetch the transaction list from the Sheet — this is what picks up new/edited entries
   let raw;
@@ -742,16 +750,20 @@ async function refreshLive(key, silent) {
     const liveNav = live ? live.nav : f.statementNav;
     const isLive = !!live;
     if (isLive) updated++;
+    const prevNav = (live && live.prevNav) || oldPrevNav[f.isin] || null;
     const value = f.units * liveNav;
     const fundWithdrawn = f.txns.filter(t=>t.a<0).reduce((s,t) => s+Math.abs(t.a), 0);
     const gain = (value + fundWithdrawn) - f.invested;
     const gainPct = f.invested ? gain / f.invested * 100 : 0;
+    const dayPnl = (isLive && prevNav) ? (liveNav - prevNav) * f.units : 0;
+    const dayPnlPct = (isLive && prevNav) ? ((liveNav / prevNav) - 1) * 100 : null;
     const finalDate = isLive ? today : (f.txns.length ? f.txns[f.txns.length-1].d : today);
     const totalBuyUnits = f.txns.filter(t => t.a > 0).reduce((s,t) => s+t.u, 0);
     newFunds.push({
       isin: f.isin, name: f.name, cat: f.cat, units: f.units, invested: f.invested,
       statementNav: f.statementNav, avgNav: totalBuyUnits ? f.invested/totalBuyUnits : 0,
-      liveNav, navDate: isLive ? today : 'stmt', isLive, value, withdrawn: fundWithdrawn, gain, gainPct,
+      liveNav, navDate: isLive ? today : 'stmt', isLive, prevNav, dayPnl, dayPnlPct,
+      value, withdrawn: fundWithdrawn, gain, gainPct,
       xirr: xirr(f.txns, value, finalDate), navHistory: oldNavHistory[f.isin] || [], txns: f.txns,
     });
   }
@@ -765,6 +777,9 @@ async function refreshLive(key, silent) {
   p.totals.xirr = xirr(allTxnsCF, p.totals.value, today);
   p.totals.withdrawn = p.funds.reduce((s,f) => s + f.txns.filter(t=>t.a<0).reduce((s2,t)=>s2+Math.abs(t.a),0), 0);
   p.totals.gain = (p.totals.value + p.totals.withdrawn) - p.totals.invested;
+  p.totals.dayPnl = p.funds.reduce((s,f) => s + f.dayPnl, 0);
+  const dayPnlBase = p.funds.reduce((s,f) => s + ((f.isLive && f.prevNav) ? f.units * f.prevNav : 0), 0);
+  p.totals.dayPnlPct = dayPnlBase ? (p.totals.dayPnl / dayPnlBase * 100) : null;
   const ranked = [...p.funds].filter(f=>f.xirr!=null).sort((a,b)=>b.xirr-a.xirr);
   p.gainers = ranked.slice(0,3).map(g=>({isin:g.isin,name:g.name,xirr:g.xirr}));
   p.losers = ranked.slice(-3).reverse().map(g=>({isin:g.isin,name:g.name,xirr:g.xirr}));
@@ -813,11 +828,14 @@ function syncFamilyFromCache(navSnapshots, today) {
   famData.totals.value = keys.reduce((s,k) => s + (cache[k]?.totals.value || 0), 0);
   famData.totals.withdrawn = keys.reduce((s,k) => s + (cache[k]?.totals.withdrawn || 0), 0);
   famData.totals.gain = (famData.totals.value + famData.totals.withdrawn) - famData.totals.invested;
+  famData.totals.dayPnl = keys.reduce((s,k) => s + (cache[k]?.totals.dayPnl || 0), 0);
+  const famDayPnlBase = keys.reduce((s,k) => s + (cache[k]?.funds || []).reduce((s2,f) => s2 + ((f.isLive && f.prevNav) ? f.units * f.prevNav : 0), 0), 0);
+  famData.totals.dayPnlPct = famDayPnlBase ? (famData.totals.dayPnl / famDayPnlBase * 100) : null;
   const allTxnsCF = keys.flatMap(k => (cache[k]?.funds || []).flatMap(f => f.txns));
   famData.totals.xirr = xirr(allTxnsCF, famData.totals.value, today);
   famData.compare = keys.map(k => ({ sheet: PORTFOLIOS[k].sheet, label: PORTFOLIOS[k].label, accent: PORTFOLIOS[k].accent,
     invested: cache[k]?.totals.invested || 0, value: cache[k]?.totals.value || 0,
-    withdrawn: cache[k]?.totals.withdrawn || 0, xirr: cache[k]?.totals.xirr ?? null }));
+    withdrawn: cache[k]?.totals.withdrawn || 0, dayPnl: cache[k]?.totals.dayPnl || 0, xirr: cache[k]?.totals.xirr ?? null }));
   const allFunds = keys.flatMap(k => cache[k]?.funds || []);
   famData.yearWise = computeYearWiseJS(allFunds, navSnapshots, today);
   if (document.getElementById('panel-fam').classList.contains('active')) renderFamily();
