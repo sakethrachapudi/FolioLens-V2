@@ -252,13 +252,15 @@ def compute_portfolio(sheet_name, nav_snapshots, today):
         isin = f["isin"]
         txns = sorted(f.get("txns", []), key=lambda t: t["d"])
         hist_data = fetch_nav_history(isin)
-        live_nav = live_date = None
+        live_nav = live_date = prev_nav = prev_nav_date = None
         scheme_name = ""
         hist_trimmed = []
         if hist_data:
             hist, scheme_name = hist_data
             if hist:
                 live_date, live_nav = hist[-1]
+            if len(hist) >= 2:
+                prev_nav_date, prev_nav = hist[-2]
             hist_trimmed = trim_history(hist)
 
         nav = live_nav if live_nav else f.get("statementNav", 0)
@@ -269,6 +271,11 @@ def compute_portfolio(sheet_name, nav_snapshots, today):
         fund_withdrawn = sum(abs(t["a"]) for t in txns if t["a"] < 0)
         gain = (value + fund_withdrawn) - invested
         gain_pct = (gain / invested * 100) if invested else 0
+
+        # Day's P&L: only meaningful when we have both a live NAV and a real prior-day
+        # NAV to compare it to (statement-NAV-only funds don't move day to day in our data).
+        day_pnl = (nav - prev_nav) * units if (is_live and prev_nav) else 0.0
+        day_pnl_pct = ((nav / prev_nav) - 1) * 100 if (is_live and prev_nav) else None
 
         final_date = today if is_live else (to_date(txns[-1]["d"]) if txns else today)
         cf = [(to_date(t["d"]), -t["a"]) for t in txns] + [(final_date, value)]
@@ -293,6 +300,7 @@ def compute_portfolio(sheet_name, nav_snapshots, today):
             "isin": isin, "name": f.get("name") or scheme_name, "cat": cat,
             "units": units, "invested": invested, "statementNav": f.get("statementNav", 0),
             "avgNav": avg_nav, "liveNav": nav, "navDate": live_date or "stmt", "isLive": is_live,
+            "prevNav": prev_nav, "prevNavDate": prev_nav_date, "dayPnl": day_pnl, "dayPnlPct": day_pnl_pct,
             "value": value, "withdrawn": fund_withdrawn, "gain": gain, "gainPct": gain_pct, "xirr": fx,
             "navHistory": hist_trimmed, "txns": txns,
         })
@@ -323,9 +331,14 @@ def compute_portfolio(sheet_name, nav_snapshots, today):
     # since it ignores cash you've already taken out and pockets it as an apparent "loss".
     true_gain = (total_val + total_withdrawn) - total_inv
 
+    day_pnl = sum(f["dayPnl"] for f in fund_out)
+    day_pnl_base = sum(f["units"] * f["prevNav"] for f in fund_out if f["isLive"] and f["prevNav"])
+    day_pnl_pct = (day_pnl / day_pnl_base * 100) if day_pnl_base else None
+
     return {
         "totals": {"invested": total_inv, "value": total_val, "xirr": port_xirr,
-                   "withdrawn": total_withdrawn, "gain": true_gain, "fundCount": len(fund_out)},
+                   "withdrawn": total_withdrawn, "gain": true_gain, "fundCount": len(fund_out),
+                   "dayPnl": day_pnl, "dayPnlPct": day_pnl_pct},
         "funds": fund_out, "yearWise": year_wise, "nature": nature_out,
         "gainers": gainers, "losers": losers,
     }, fam_cf
@@ -384,6 +397,10 @@ def main():
     fam_inv = sum(p["totals"]["invested"] for p in portfolios_out.values())
     fam_val = sum(p["totals"]["value"] for p in portfolios_out.values())
     fam_withdrawn = sum(p["totals"].get("withdrawn", 0) for p in portfolios_out.values())
+    fam_day_pnl = sum(p["totals"].get("dayPnl", 0) for p in portfolios_out.values())
+    fam_day_pnl_base = sum(f["units"] * f["prevNav"] for p in portfolios_out.values()
+                            for f in p["funds"] if f["isLive"] and f["prevNav"])
+    fam_day_pnl_pct = (fam_day_pnl / fam_day_pnl_base * 100) if fam_day_pnl_base else None
     fam_cf_all.append((today, fam_val))
     fam_xirr = xirr(fam_cf_all)
 
@@ -392,7 +409,7 @@ def main():
 
     compare = [{"sheet": sheet, "label": p["label"], "accent": p["accent"],
                 "invested": p["totals"]["invested"], "value": p["totals"]["value"],
-                "withdrawn": p["totals"].get("withdrawn", 0),
+                "withdrawn": p["totals"].get("withdrawn", 0), "dayPnl": p["totals"].get("dayPnl", 0),
                 "xirr": p["totals"]["xirr"]} for sheet, p in portfolios_out.items()]
 
     output = {
@@ -400,7 +417,8 @@ def main():
         "portfolios": portfolios_out,
         "family": {
             "totals": {"invested": fam_inv, "value": fam_val, "withdrawn": fam_withdrawn,
-                       "gain": (fam_val + fam_withdrawn) - fam_inv, "xirr": fam_xirr},
+                       "gain": (fam_val + fam_withdrawn) - fam_inv, "xirr": fam_xirr,
+                       "dayPnl": fam_day_pnl, "dayPnlPct": fam_day_pnl_pct},
             "yearWise": fam_year_wise, "compare": compare,
         },
     }
