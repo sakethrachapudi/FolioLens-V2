@@ -679,8 +679,10 @@ function renderFamily() {
   const cb = document.getElementById('fam-compareBody');
   cb.innerHTML = famData.compare.map(r => {
     const gain = (r.value + (r.withdrawn||0)) - r.invested, gp = r.invested ? gain/r.invested*100 : 0;
+    const dp = r.dayPnl || 0;
     return `<tr><td><span class="compare-accent" style="color:${r.accent}"><span class="compare-dot" style="background:${r.accent}"></span>${esc(r.label)}</span></td>
       <td class="r mo">${fmt(r.invested)}</td><td class="r mo">${fmt(r.value)}</td>
+      <td class="r mo ${posC(dp)}">${dp>=0?'+':'-'}${fmt(Math.abs(dp))}</td>
       <td class="r"><span class="mo ${posC(gain)}">${gain>=0?'+':'-'}${fmt(Math.abs(gain))}</span> <span class="bg ${gain>=0?'bgp':'bgn'}">${pct(gp)}</span></td>
       <td class="r mo ${posC(r.xirr)}">${r.xirr!=null?pct(r.xirr):'—'}</td></tr>`;
   }).join('');
