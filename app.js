@@ -718,6 +718,90 @@ function renderFamily() {
 /* ============================================================
    LIVE REFRESH (manual button — client-side NAV re-fetch)
    ============================================================ */
+/**
+ * Family tab's single "Refresh All" button. Tries the proper path first (trigger the
+ * GitHub Action, wait for data.json to actually update), and only falls back to a
+ * direct Sheets+mfapi refresh if the workflow doesn't complete within a reasonable
+ * window -- so under normal conditions everyone gets the same canonical data.json
+ * everyone else will see too, not just a client-side-only view.
+ */
+async function refreshAllFromWorkflow() {
+  const btn = document.getElementById('fam-refreshBtn');
+  const banner = document.getElementById('fam-refreshBanner');
+  const msg = document.getElementById('fam-refreshMsg');
+  btn.disabled = true; btn.textContent = '↻ Refreshing…';
+  banner.classList.add('show');
+  msg.textContent = 'Triggering data refresh workflow…';
+
+  const beforeGeneratedAt = dataMeta ? dataMeta.generatedAt : null;
+
+  let triggerOk = false;
+  try {
+    const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'trigger_refresh' }) });
+    const j = await res.json().catch(() => ({}));
+    triggerOk = !!(j && j.success);
+  } catch (e) { triggerOk = false; }
+
+  if (!triggerOk) {
+    msg.textContent = 'Could not trigger the workflow — falling back to a direct refresh…';
+    await fallbackDirectRefreshAll();
+    return;
+  }
+
+  msg.textContent = 'Waiting for fresh data (this can take a minute or two)…';
+  const maxAttempts = 12, intervalMs = 15000; // up to ~3 minutes
+  let succeeded = false;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await new Promise(r => setTimeout(r, intervalMs));
+    msg.textContent = `Waiting for fresh data… (check ${attempt}/${maxAttempts})`;
+    try {
+      const res = await fetch(`./data.json?t=${Date.now()}`, { cache: 'no-store' });
+      if (res.ok) {
+        const json = await res.json();
+        if (!beforeGeneratedAt || json.generatedAt !== beforeGeneratedAt) {
+          dataMeta = { generatedAt: json.generatedAt };
+          Object.entries(PORTFOLIOS).forEach(([key, p]) => {
+            const pdata = json.portfolios[p.sheet];
+            if (pdata) cache[key] = pdata;
+          });
+          famData = json.family;
+          Object.keys(PORTFOLIOS).forEach(renderPortfolio);
+          renderFamily();
+          Object.keys(PORTFOLIOS).forEach(loadSchedules);
+          const gen = new Date(dataMeta.generatedAt);
+          document.getElementById('dataFreshness').textContent =
+            `Data as of ${gen.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })} · auto-refreshes every 6h`;
+          succeeded = true;
+          break;
+        }
+      }
+    } catch (e) { /* keep trying */ }
+  }
+
+  if (succeeded) {
+    toast('Refreshed from the latest workflow run — all 4 pages updated');
+    banner.classList.remove('show');
+    btn.disabled = false; btn.textContent = '↻ Refresh All';
+  } else {
+    msg.textContent = 'Workflow is taking longer than expected — falling back to a direct refresh…';
+    await fallbackDirectRefreshAll();
+  }
+}
+
+async function fallbackDirectRefreshAll() {
+  const banner = document.getElementById('fam-refreshBanner');
+  const msg = document.getElementById('fam-refreshMsg');
+  const btn = document.getElementById('fam-refreshBtn');
+  for (const key of Object.keys(PORTFOLIOS)) {
+    msg.textContent = `Refreshing ${PORTFOLIOS[key].label} directly from Sheets + mfapi…`;
+    await refreshLive(key, true);
+  }
+  toast('Refreshed directly from Sheets + mfapi (workflow fallback) — all 4 pages updated');
+  banner.classList.remove('show');
+  btn.disabled = false; btn.textContent = '↻ Refresh All';
+}
+
 async function refreshLive(key, silent) {
   const p = cache[key];
   if (!p) return;
@@ -1084,6 +1168,7 @@ function switchTab(key) {
 function wireEvents() {
   document.querySelectorAll('.tab-btn').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.key)));
   document.querySelectorAll('.bn-btn').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.key)));
+  document.getElementById('fam-refreshBtn').addEventListener('click', refreshAllFromWorkflow);
 
   Object.keys(PORTFOLIOS).forEach(key => {
     document.getElementById(`${key}-refreshBtn`).addEventListener('click', () => refreshLive(key));

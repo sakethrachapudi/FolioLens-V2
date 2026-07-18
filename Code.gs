@@ -305,6 +305,7 @@ function doPost(e) {
     if (action === 'delete_txn') return handleDeleteTxn(body);
     if (action === 'create_schedule') return handleCreateSchedule(body);
     if (action === 'set_schedule_status') return handleSetScheduleStatus(body);
+    if (action === 'trigger_refresh') { triggerGitHubActionRefresh(); return respond(null, { success: true }); }
     return handleAddTxn(body);
   } catch (err) {
     return respond(null, { error: err.message });
