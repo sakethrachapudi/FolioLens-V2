@@ -2,7 +2,10 @@ name: Refresh Portfolio Data
 
 on:
   schedule:
-    - cron: '0 */6 * * *'   # every 6 hours
+    - cron: '20 3,5,10,12,14,18,21 * * *'   # 3:20am, 5:20am, 10:20am, 12:20pm, 2:20pm, 6:20pm, 9:20pm IST
+      timezone: 'Asia/Kolkata'
+    - cron: '50 7 * * *'                    # 7:50am IST
+      timezone: 'Asia/Kolkata'
   workflow_dispatch: {}      # lets you trigger it manually from the Actions tab
 
 permissions:
