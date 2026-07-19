@@ -47,6 +47,27 @@ const pct   = n => n == null ? '—' : (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
 const posC  = n => (n == null || n >= 0) ? 'up' : 'down';
 const posCol= n => (n == null || n >= 0) ? 'var(--ac)' : 'var(--rd)';
 const td    = () => new Date().toISOString().slice(0,10);
+
+// Must match .github/workflows/refresh-data.yml's cron times exactly (IST).
+const SCHEDULE_TIMES_IST = [
+  { h: 3, m: 20 }, { h: 5, m: 20 }, { h: 7, m: 50 }, { h: 10, m: 20 },
+  { h: 12, m: 20 }, { h: 14, m: 20 }, { h: 18, m: 20 }, { h: 21, m: 20 },
+];
+function nextScheduledRefreshLabel() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit',
+  }).formatToParts(new Date());
+  const get = t => parseInt(parts.find(p => p.type === t).value, 10);
+  const curMinutes = get('hour') * 60 + get('minute');
+
+  let next = SCHEDULE_TIMES_IST.find(t => (t.h * 60 + t.m) > curMinutes);
+  let tomorrow = false;
+  if (!next) { next = SCHEDULE_TIMES_IST[0]; tomorrow = true; }
+
+  const h12 = next.h % 12 === 0 ? 12 : next.h % 12;
+  const ampm = next.h < 12 ? 'AM' : 'PM';
+  return `${h12}:${String(next.m).padStart(2,'0')} ${ampm} IST${tomorrow ? ' tomorrow' : ''}`;
+}
 const esc   = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 function toast(msg) {
@@ -771,7 +792,7 @@ async function refreshAllFromWorkflow() {
           Object.keys(PORTFOLIOS).forEach(loadSchedules);
           const gen = new Date(dataMeta.generatedAt);
           document.getElementById('dataFreshness').textContent =
-            `Data as of ${gen.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })} · auto-refreshes every 6h`;
+            `Data as of ${gen.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })} · next scheduled refresh ${nextScheduledRefreshLabel()}`;
           succeeded = true;
           break;
         }
@@ -1205,7 +1226,7 @@ async function init() {
     Object.keys(PORTFOLIOS).forEach(loadSchedules);
     renderFamily();
     const gen = new Date(dataMeta.generatedAt);
-    document.getElementById('dataFreshness').textContent = `Data as of ${gen.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })} · auto-refreshes every 6h`;
+    document.getElementById('dataFreshness').textContent = `Data as of ${gen.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })} · next scheduled refresh ${nextScheduledRefreshLabel()}`;
   } catch (e) {
     document.getElementById('dataFreshness').textContent = 'Could not load data.json — ' + e.message;
     console.error(e);
