@@ -2,10 +2,13 @@ name: Refresh Portfolio Data
 
 on:
   schedule:
-    - cron: '20 3,5,10,12,14,18,21 * * *'   # 3:20am, 5:20am, 10:20am, 12:20pm, 2:20pm, 6:20pm, 9:20pm IST
-      timezone: 'Asia/Kolkata'
-    - cron: '50 7 * * *'                    # 7:50am IST
-      timezone: 'Asia/Kolkata'
+    # Times below are UTC (GitHub Actions' most reliable, battle-tested cron format).
+    # IST equivalents: 21:50/23:50 UTC = 3:20am/5:20am IST (next day);
+    # 02:20 UTC = 7:50am IST; 04:50 UTC = 10:20am IST; 06:50 UTC = 12:20pm IST;
+    # 08:50 UTC = 2:20pm IST; 12:50 UTC = 6:20pm IST; 15:50 UTC = 9:20pm IST.
+    - cron: '50 21,23 * * *'
+    - cron: '20 2 * * *'
+    - cron: '50 4,6,8,12,15 * * *'
   workflow_dispatch: {}      # lets you trigger it manually from the Actions tab
 
 permissions:
