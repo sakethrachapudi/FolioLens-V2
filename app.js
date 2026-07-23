@@ -440,7 +440,10 @@ async function loadSchedules(key) {
 
 const DOW_LABEL = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+const scheduleCache = {}; // key -> array of schedules, for lookup when opening the edit modal
+
 function renderSchedules(key, schedules) {
+  scheduleCache[key] = schedules;
   const header = document.getElementById(`${key}-schedHeader`);
   if (!schedules.length) { header.style.display = 'none'; return; }
   header.style.display = '';
@@ -453,18 +456,19 @@ function renderSchedules(key, schedules) {
       : s.status === 'paused' ? '<span class="bg bgw">Paused</span>'
       : '<span class="bg bgo">Stopped</span>';
     const kindBadge = s.kind === 'swp' ? '<span class="bg bgn">SWP</span>' : '<span class="bg bgp">SIP</span>';
-    let actions = '<span class="fund-cat">—</span>';
+    let statusActions = '';
     if (s.status === 'active') {
-      actions = `<div class="txn-actions">
-        <button class="txn-act-btn" title="Pause" onclick="setScheduleStatus('${key}','${s.id}','paused')">⏸</button>
-        <button class="txn-act-btn danger" title="Stop" onclick="setScheduleStatus('${key}','${s.id}','stopped')">■</button>
-      </div>`;
+      statusActions = `<button class="txn-act-btn" title="Pause" onclick="setScheduleStatus('${key}','${s.id}','paused')">⏸</button>
+        <button class="txn-act-btn danger" title="Stop" onclick="setScheduleStatus('${key}','${s.id}','stopped')">■</button>`;
     } else if (s.status === 'paused') {
-      actions = `<div class="txn-actions">
-        <button class="txn-act-btn" title="Resume" onclick="setScheduleStatus('${key}','${s.id}','active')">▶</button>
-        <button class="txn-act-btn danger" title="Stop" onclick="setScheduleStatus('${key}','${s.id}','stopped')">■</button>
-      </div>`;
+      statusActions = `<button class="txn-act-btn" title="Resume" onclick="setScheduleStatus('${key}','${s.id}','active')">▶</button>
+        <button class="txn-act-btn danger" title="Stop" onclick="setScheduleStatus('${key}','${s.id}','stopped')">■</button>`;
     }
+    const actions = `<div class="txn-actions">
+      ${statusActions}
+      <button class="txn-act-btn" title="Edit" onclick="openEditSchedule('${key}','${s.id}')">✏️</button>
+      <button class="txn-act-btn danger" title="Delete" onclick="deleteSchedule('${key}','${s.id}')">🗑</button>
+    </div>`;
     return `<tr>
       <td>${esc(s.name)}<br><span class="fund-cat">${esc(s.cat)}</span></td>
       <td>${kindBadge}</td>
@@ -493,14 +497,15 @@ async function setScheduleStatus(key, id, newStatus) {
 }
 
 /* ---------- Create SIP/SWP modal ---------- */
-let schModalKey = null, schModalKind = 'sip';
+let schModalKey = null, schModalKind = 'sip', schModalEditId = null;
 
 function openCreateSchedule(key, kind) {
   if (!checkPinUnlock()) return;
-  schModalKey = key; schModalKind = kind;
+  schModalKey = key; schModalKind = kind; schModalEditId = null;
   document.getElementById('schModalTitle').textContent = `${kind === 'swp' ? 'Create SWP' : 'Create SIP'} — ${PORTFOLIOS[key].label}`;
 
   const sel = document.getElementById('schFundSelect');
+  sel.disabled = false;
   const activeFunds = cache[key].funds.filter(f => Math.abs(f.units) > 0.001);
   let options = activeFunds.map(f => `<option value="${f.isin}">${esc(f.name)}</option>`).join('');
   if (kind === 'sip') options = '<option value="__new__">+ New fund…</option>' + options;
@@ -512,12 +517,54 @@ function openCreateSchedule(key, kind) {
   document.getElementById('schDayWeekly').value = '1';
   document.getElementById('schDayMonthly').value = '';
   document.getElementById('schStartDate').value = td();
+  document.getElementById('schStartDateField').style.display = '';
   updateSchDayFields();
   updateSchNewFundVisibility();
   document.getElementById('schError').style.display = 'none';
   document.getElementById('schSubmitBtn').disabled = false;
   document.getElementById('schSubmitBtn').textContent = 'Create';
   document.getElementById('schModalOverlay').classList.add('show');
+}
+
+function openEditSchedule(key, id) {
+  if (!checkPinUnlock()) return;
+  const s = (scheduleCache[key] || []).find(x => x.id === id);
+  if (!s) { toast('Could not find that schedule'); return; }
+  schModalKey = key; schModalKind = s.kind; schModalEditId = id;
+  document.getElementById('schModalTitle').textContent = `Edit ${s.kind === 'swp' ? 'SWP' : 'SIP'} — ${s.name}`;
+
+  const sel = document.getElementById('schFundSelect');
+  sel.innerHTML = `<option value="${s.isin}">${esc(s.name)}</option>`;
+  sel.disabled = true; // can't move a schedule to a different fund via edit -- delete and recreate instead
+
+  document.getElementById('schNewFundBlock').style.display = 'none';
+  document.getElementById('schAmount').value = s.amount;
+  document.getElementById('schFrequency').value = s.frequency;
+  if (s.frequency === 'weekly') document.getElementById('schDayWeekly').value = String(s.dayValue);
+  else document.getElementById('schDayMonthly').value = s.dayValue;
+  document.getElementById('schStartDateField').style.display = 'none'; // editing recalculates next-due from today instead
+  updateSchDayFields();
+  document.getElementById('schError').style.display = 'none';
+  document.getElementById('schSubmitBtn').disabled = false;
+  document.getElementById('schSubmitBtn').textContent = 'Save Changes';
+  document.getElementById('schModalOverlay').classList.add('show');
+}
+
+async function deleteSchedule(key, id) {
+  if (!checkPinUnlock()) return;
+  const s = (scheduleCache[key] || []).find(x => x.id === id);
+  const label = s ? `${s.kind.toUpperCase()} · ${s.name} · ${fmt(s.amount)}` : 'this schedule';
+  if (!confirm(`Delete ${label}?\n\nThis removes it permanently -- it cannot be recovered from the dashboard.`)) return;
+  try {
+    const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'delete_schedule', id }) });
+    const j = await res.json().catch(() => ({}));
+    if (j && j.error) throw new Error(j.error);
+    toast('Schedule deleted');
+    loadSchedules(key);
+  } catch (e) {
+    toast('Could not delete: ' + e.message);
+  }
 }
 
 function closeSchModal() { document.getElementById('schModalOverlay').classList.remove('show'); }
@@ -536,8 +583,9 @@ function updateSchNewFundVisibility() {
 async function submitSchedule() {
   const key = schModalKey;
   const sheet = PORTFOLIOS[key].sheet;
+  const isEdit = !!schModalEditId;
   const isinSel = document.getElementById('schFundSelect').value;
-  const isNew = schModalKind === 'sip' && isinSel === '__new__';
+  const isNew = !isEdit && schModalKind === 'sip' && isinSel === '__new__';
   const amount = parseFloat(document.getElementById('schAmount').value);
   const frequency = document.getElementById('schFrequency').value;
   const dayValue = frequency === 'weekly'
@@ -552,30 +600,34 @@ async function submitSchedule() {
   if (!dayValue || (frequency === 'monthly' && (dayValue < 1 || dayValue > 31))) {
     errBox.textContent = 'Please pick a valid day.'; errBox.style.display = 'block'; return;
   }
-  if (!startDate) { errBox.textContent = 'Start date is required.'; errBox.style.display = 'block'; return; }
+  if (!isEdit && !startDate) { errBox.textContent = 'Start date is required.'; errBox.style.display = 'block'; return; }
 
-  const payload = { action: 'create_schedule', sheet, kind: schModalKind, amount, frequency, dayValue, startDate };
-  if (isNew) {
-    payload.isin = document.getElementById('schNewIsin').value.trim();
-    payload.name = document.getElementById('schNewName').value.trim();
-    payload.cat = document.getElementById('schNewCat').value.trim();
-    if (!payload.isin || !payload.name) { errBox.textContent = 'New fund needs at least ISIN and name.'; errBox.style.display = 'block'; return; }
-  } else {
-    payload.isin = isinSel;
+  const payload = isEdit
+    ? { action: 'edit_schedule', id: schModalEditId, amount, frequency, dayValue }
+    : { action: 'create_schedule', sheet, kind: schModalKind, amount, frequency, dayValue, startDate };
+  if (!isEdit) {
+    if (isNew) {
+      payload.isin = document.getElementById('schNewIsin').value.trim();
+      payload.name = document.getElementById('schNewName').value.trim();
+      payload.cat = document.getElementById('schNewCat').value.trim();
+      if (!payload.isin || !payload.name) { errBox.textContent = 'New fund needs at least ISIN and name.'; errBox.style.display = 'block'; return; }
+    } else {
+      payload.isin = isinSel;
+    }
   }
 
   const btn = document.getElementById('schSubmitBtn');
-  btn.disabled = true; btn.textContent = 'Creating…';
+  btn.disabled = true; btn.textContent = isEdit ? 'Saving…' : 'Creating…';
   try {
     const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) });
     const j = await res.json().catch(() => ({}));
     if (j && j.error) throw new Error(j.error);
-    btn.textContent = 'Created ✓';
-    toast(`${schModalKind.toUpperCase()} scheduled — next due ${j.nextDueDate || ''}`);
-    setTimeout(() => { closeSchModal(); btn.disabled = false; btn.textContent = 'Create'; loadSchedules(key); }, 700);
+    btn.textContent = isEdit ? 'Saved ✓' : 'Created ✓';
+    toast(isEdit ? `Schedule updated — next due ${j.nextDueDate || ''}` : `${schModalKind.toUpperCase()} scheduled — next due ${j.nextDueDate || ''}`);
+    setTimeout(() => { closeSchModal(); btn.disabled = false; btn.textContent = isEdit ? 'Save Changes' : 'Create'; loadSchedules(key); }, 700);
   } catch (e) {
-    btn.disabled = false; btn.textContent = 'Create';
-    errBox.textContent = 'Could not create — ' + e.message;
+    btn.disabled = false; btn.textContent = isEdit ? 'Save Changes' : 'Create';
+    errBox.textContent = (isEdit ? 'Could not save — ' : 'Could not create — ') + e.message;
     errBox.style.display = 'block';
   }
 }

@@ -306,6 +306,8 @@ function doPost(e) {
     if (action === 'create_schedule') return handleCreateSchedule(body);
     if (action === 'set_schedule_status') return handleSetScheduleStatus(body);
     if (action === 'trigger_refresh') { triggerGitHubActionRefresh(); return respond(null, { success: true }); }
+    if (action === 'edit_schedule') return handleEditSchedule(body);
+    if (action === 'delete_schedule') return handleDeleteSchedule(body);
     return handleAddTxn(body);
   } catch (err) {
     return respond(null, { error: err.message });
@@ -350,7 +352,6 @@ function handleAddTxn(body) {
   cat = cat || 'Other';
 
   ws.appendRow([name, isin, cat, date, type, round3(units), round2(nav), Utilities.getUuid()]);
-  triggerGitHubActionRefresh();
 
   return respond(null, { success: true, isin, name, cat, type, units: round3(units), nav: round2(nav) });
 }
@@ -391,7 +392,6 @@ function handleEditTxn(body) {
   ws.getRange(row, 7).setValue(round2(nav));     // price/nav
   // columns 1-3 (name/isin/cat) and 8 (id) are left untouched — you can't move a
   // transaction to a different fund via edit; delete and re-add instead.
-  triggerGitHubActionRefresh();
 
   return respond(null, { success: true, type, units: round3(units), nav: round2(nav) });
 }
@@ -409,7 +409,6 @@ function handleDeleteTxn(body) {
     return respond(null, { error: 'Transaction not found. If this was added before the ID column existed, run backfillTxnIDs() once from the Apps Script editor.' });
   }
   ws.deleteRow(row);
-  triggerGitHubActionRefresh();
   return respond(null, { success: true });
 }
 
@@ -498,18 +497,21 @@ function lookupExistingFund(ws, isin) {
      Tuesday). We never guess at a NAV -- we only ever write a transaction once we've
      confirmed a *real* NAV exists.
    - SIPs look FORWARD: confirmed NAV for the due date itself, or the next actual
-     trading day after it if the due date was a holiday/weekend.
-   - SWPs look BACKWARD: this deliberately matches how Zerodha Coin (and similar
-     platforms) actually price scheduled withdrawals -- a Tuesday SWP uses Monday's
-     NAV, not Tuesday's, since the redemption instruction is effectively processed
-     against the prior day's cutoff. This means an SWP's due-date NAV is normally
-     already published by the time its due date arrives, so it typically executes
-     right away rather than waiting a day like a SIP does. The transaction is dated
-     to match whichever day's NAV was actually used (so XIRR timing stays correct),
-     not the nominal due date.
+     trading day after it if the due date was a holiday/weekend. Units are simply
+     amount / that NAV.
+   - SWPs are more nuanced -- confirmed against Zerodha Coin's own documented
+     mechanism, not assumed: units to redeem are fixed using the NAV of the trading
+     day *before* the actual execution date (T-1), but the redemption itself --
+     the real date, real price, and real rupee amount credited -- uses the
+     execution date's *own* NAV (T), found the same way as a SIP (forward search).
+     This means the actual amount received can differ slightly from the nominal
+     scheduled amount (e.g. a "₹7,500 SWP" might actually redeem to ₹7,486 or
+     ₹7,512 depending on how the NAV moved from T-1 to T) -- and it also means SWPs
+     need to wait for their own execution day's NAV just like SIPs do, typically
+     resolving the next morning, not same-day.
    - "Was it a holiday?" is never looked up from a calendar we'd have to maintain --
      if mfapi.in genuinely has no NAV entry for a date once we're checking a day or
-     more after it (SIP) or before it (SWP), that date simply wasn't a trading day.
+     more after it, that date simply wasn't a trading day.
      This stays correct forever with zero maintenance.
    - processScheduledSIPs() is meant to be triggered several times a day (see
      setupScheduleTriggers below). Each run is a cheap no-op unless it finds a real,
@@ -659,8 +661,8 @@ function getSchedules(sheetName) {
     out.push({
       id: row[0].toString(), sheet: row[1], isin: row[2], name: row[3], cat: row[4],
       amount: parseFloat(row[5]), kind: row[6], frequency: row[7], dayValue: parseInt(row[8]),
-      status: row[9], nextDueDate: row[10] ? row[10].toString() : '',
-      lastProcessedDate: row[11] ? row[11].toString() : '',
+      status: row[9], nextDueDate: formatDate(row[10]) || '',
+      lastProcessedDate: formatDate(row[11]) || '',
     });
   }
   return { schedules: out };
@@ -711,6 +713,49 @@ function handleSetScheduleStatus(body) {
   return respond(null, { error: 'Schedule not found' });
 }
 
+/** Edits amount/frequency/day for an existing schedule. Fund (isin/kind) can't be
+    changed via edit -- delete and create a new one instead, same convention as
+    transaction editing. Changing frequency/day recalculates NextDueDate fresh from
+    today, since the old cadence anchor no longer means anything once it's changed. */
+function handleEditSchedule(body) {
+  const id = body.id;
+  if (!id) return respond(null, { error: 'Missing schedule id' });
+  const amount = parseFloat(body.amount);
+  const frequency = body.frequency === 'monthly' ? 'monthly' : 'weekly';
+  const dayValue = parseInt(body.dayValue);
+  if (!amount || amount <= 0 || !dayValue) return respond(null, { error: 'Amount and day are required' });
+
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const ws = ensureScheduleSheet(ss);
+  const data = ws.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] && data[i][0].toString() === id) {
+      ws.getRange(i + 1, 6).setValue(amount);
+      ws.getRange(i + 1, 8).setValue(frequency);
+      ws.getRange(i + 1, 9).setValue(dayValue);
+      const newNextDue = computeFirstDueDate(frequency, dayValue, toISO(new Date()));
+      ws.getRange(i + 1, 11).setValue(newNextDue);
+      return respond(null, { success: true, nextDueDate: newNextDue });
+    }
+  }
+  return respond(null, { error: 'Schedule not found' });
+}
+
+function handleDeleteSchedule(body) {
+  const id = body.id;
+  if (!id) return respond(null, { error: 'Missing schedule id' });
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const ws = ensureScheduleSheet(ss);
+  const data = ws.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] && data[i][0].toString() === id) {
+      ws.deleteRow(i + 1);
+      return respond(null, { success: true });
+    }
+  }
+  return respond(null, { error: 'Schedule not found' });
+}
+
 /**
  * The processor. Meant to run several times a day (see setupScheduleTriggers).
  * For every active, due schedule: checks whether a real NAV is confirmed for its due
@@ -728,11 +773,14 @@ function processScheduledSIPs() {
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
     if (row[9] !== 'active') continue;
-    const nextDue = row[10] ? row[10].toString() : '';
+    const nextDue = formatDate(row[10]) || '';
     if (!nextDue || nextDue > today) continue;
 
     const isin = row[2], kind = row[6];
-    const found = kind === 'swp' ? findPreviousAvailableNAV(isin, nextDue) : findNextAvailableNAV(isin, nextDue);
+    // Both SIP and SWP need the actual execution day's own confirmed NAV --
+    // per Zerodha's documented mechanism, an SWP's real redemption (the money you
+    // actually receive) is priced using T's NAV, not T-1's. See the comment above.
+    const found = findNextAvailableNAV(isin, nextDue);
     if (!found || found.date > today) continue; // not confirmed yet -- try again next run
 
     const sheetName = row[1], amount = parseFloat(row[5]);
@@ -741,17 +789,30 @@ function processScheduledSIPs() {
     if (!targetWs) continue;
 
     const type = kind === 'swp' ? 'sell' : 'buy';
-    const units = amount / found.nav;
+    let units;
+    if (kind === 'swp') {
+      // Units are fixed using the NAV of the trading day immediately before the
+      // actual execution date (T-1) -- this is what determines "how many units,"
+      // exactly like Zerodha's own SWP mechanism. The redemption itself (date,
+      // price, and the real rupee amount credited) still uses T's NAV (found.nav),
+      // so the actual amount can differ slightly from the nominal target `amount`.
+      const prev = findPreviousAvailableNAV(isin, found.date);
+      const unitNav = prev ? prev.nav : found.nav; // fallback if no prior data exists at all
+      units = amount / unitNav;
+    } else {
+      units = amount / found.nav;
+    }
+    const actualAmount = units * found.nav;
+
     targetWs.appendRow([row[3], isin, row[4], found.date, type, round3(units), round2(found.nav), Utilities.getUuid()]);
     processedAny = true;
 
     const newNextDue = addPeriod(nextDue, frequency, dayValue);
     ws.getRange(i + 1, 11).setValue(newNextDue);
     ws.getRange(i + 1, 12).setValue(found.date);
-    Logger.log(`Processed ${kind.toUpperCase()} — ${row[3]} (${sheetName}): ${found.date} @ ₹${found.nav}, next due ${newNextDue}`);
+    Logger.log(`Processed ${kind.toUpperCase()} — ${row[3]} (${sheetName}): ${found.date} @ ₹${found.nav}, `
+      + `${units.toFixed(3)} units (target ₹${amount}, actual ₹${actualAmount.toFixed(2)}), next due ${newNextDue}`);
   }
-
-  if (processedAny) triggerGitHubActionRefresh();
 }
 
 /**
